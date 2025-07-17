@@ -1,0 +1,780 @@
+/* DeepRead 深度阅读助手 - 内容脚本样式 */
+
+/* 定义CSS变量，便于统一管理颜色 */
+:root {
+    --deepread-primary: #4CAF50;
+    --deepread-primary-hover: #45a049;
+    --deepread-text: #333;
+    --deepread-text-light: #555;
+    --deepread-text-lighter: #888;
+    --deepread-bg-main: #fff;
+    --deepread-bg-secondary: #f9f9f9;
+    --deepread-bg-tertiary: #f5f5f5;
+    --deepread-border: #ddd;
+    --deepread-border-light: #eee;
+    --deepread-highlight: rgba(76, 175, 80, 0.2);
+    --deepread-link: #2196F3;
+}
+
+/* 深度阅读面板 */
+.deepread-container {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 400px;
+    min-width: 400px; /* 最小宽度限制 */
+    height: 100vh;
+    max-width: 80vw; /* 增加最大宽度限制，避免拖动过大 */
+    background-color: var(--deepread-bg-main) !important;
+    color: var(--deepread-text) !important;
+    box-shadow: -2px 0 10px rgba(0, 0, 0, 0.2);
+    z-index: 9999;
+    overflow: hidden;
+    font-family: 'Microsoft YaHei', Arial, sans-serif;
+    transition: opacity 0.3s ease; /* 移除width的过渡效果，以便拖动时流畅 */
+    display: flex;
+    flex-direction: column;
+    resize: horizontal; /* 启用水平调整大小 */
+}
+
+/* 拖动边界样式 */
+.deepread-resize-handle {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 5px;
+    height: 100%;
+    cursor: ew-resize;
+    background-color: transparent;
+    z-index: 10000;
+}
+
+.deepread-resize-handle:hover,
+.deepread-resize-handle.active {
+    background-color: rgba(76, 175, 80, 0.3);
+}
+
+.deepread-hidden {
+    transform: translateX(100%);
+    opacity: 0;
+    pointer-events: none;
+}
+
+.deepread-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    background-color: var(--deepread-primary);
+    color: white !important;
+}
+
+.deepread-header h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 500;
+}
+
+.deepread-header button {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 24px;
+    cursor: pointer;
+    padding: 0 5px;
+}
+
+.deepread-content {
+    padding: 5px;
+    overflow-y: auto;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 120px); /* 预留底部输入框的空间 */
+    background-color: var(--deepread-bg-main) !important;
+    color: var(--deepread-text) !important;
+}
+
+/* 全局通用 按钮样式 */
+.deepread-btn {
+    background-color: var(--deepread-primary) !important;
+    color: white !important;
+    border: none !important;
+    padding: 8px 16px !important;
+    border-radius: 4px !important;
+    cursor: pointer !important;
+    font-size: 14px !important;
+    font-weight: 500 !important;
+    transition: background-color 0.3s ease !important;
+    text-align: center !important;
+    display: inline-block !important;
+    margin: 5px 0 !important;
+}
+
+.deepread-btn:hover {
+    background-color: var(--deepread-primary-hover) !important;
+}
+
+.deepread-btn:disabled {
+    background-color: #cccccc !important;
+    cursor: not-allowed !important;
+}
+
+
+/* 解释区域样式 最低200 */
+.deepread-explanation-section {
+    /* margin-bottom: 10px; */
+    padding: 10px;
+    background-color: #f9f9f9;
+    border-radius: 4px;
+    overflow-y: auto;
+    overflow-x: hidden; /* 禁止水平滚动 */
+    min-height: 200px;
+    height: 40vh;
+    max-height: 50vh;
+    border: 1px solid #eee;
+    flex-shrink: 0; /* 防止被压缩 */
+    word-wrap: break-word; /* 长单词换行 */
+    white-space: normal; /* 正常换行 */
+}
+
+.deepread-explanation-section p {
+    margin-bottom: 0;
+}
+
+.deepread-explanation-section h3 {
+    margin: 0;
+    color: #4CAF50;
+    font-size: 18px;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 5px;
+}
+
+/* 关键术语列表样式 */
+.deepread-key-terms {
+    margin: 10px 0;
+    background-color: #f8f9fa;
+    border-radius: 5px;
+    padding: 10px;
+    border-left: 3px solid #2196F3;
+}
+  
+.deepread-key-terms h4 {
+    margin-top: 0;
+    margin-bottom: 8px;
+    color: #333;
+    font-size: 14px;
+}
+
+.deepread-key-terms ul {
+    margin: 0;
+    padding-left: 20px;
+}
+
+.deepread-key-terms li {
+    margin-bottom: 4px;
+    font-size: 13px;
+    color: #555;
+}
+  
+/* 相关概念/段落区域样式 */
+.deepread-related {
+    margin-top: 0px;
+    background-color: #f9f9f9;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+.deepread-related h4 {
+    margin-top: 1px;
+    margin-bottom: 1px;
+    font-size: 16px;
+    color: #444;
+}
+
+.deepread-related ul {
+    margin: 2px 0;
+    padding-left: 20px;
+}
+
+.deepread-related-concept {
+    /* color: #4CAF50; */
+    color: #2196F3;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.deepread-related-concept:hover {
+    text-decoration: underline;
+}
+
+.deepread-related-paragraphs {
+    margin-top: 10px;
+    max-height: 200px;
+    overflow-y: auto;
+    overflow-x: hidden; /* 禁止水平滚动 */
+    border-top: 1px solid #eee;
+    padding-top: 5px;
+    word-wrap: break-word; /* 长单词换行 */
+    white-space: normal; /* 正常换行 */
+}
+
+/* 相关段落 */
+.deepread-related-content {
+    margin-top: 5px;
+    margin-bottom: 5px;
+    padding: 5px;
+    background-color: #f0f0f0;
+    border-radius: 4px;
+    border-radius: 0 4px 4px 0;
+    border-left: 3px solid #4CAF50;
+    word-wrap: break-word; /* 长单词换行 */
+    white-space: normal; /* 正常换行 */
+    overflow-x: hidden; /* 禁止水平滚动 */
+}
+
+.deepread-related-content p {
+    font-size: 14px;
+    margin-bottom: 5px;
+}
+
+.deepread-paragraph-reason {
+    color: #2196F3;
+}
+
+/* 跳转到段落按钮 */
+.deepread-navigate-btn {
+    background-color: #f0f0f0;
+    color: #333;
+    border: 1px solid #ddd;
+    padding: 5px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 12px;
+    margin-bottom: 5px;
+}
+
+/* 概念标题区 */
+.deepread-concept-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+/* 概念标题 */
+.deepread-concept-title {
+    font-size: 18px;
+    font-weight: bold;
+    color: #333;
+    flex: 1;
+}
+
+/* 概念导航按钮组 */
+.deepread-concept-nav {
+    display: flex;
+    gap: 5px;
+}
+
+/* 清除按钮 */
+.deepread-clear-btn {
+    background-color: #f0f0f0;
+    color: #555;
+    border: 1px solid #ddd;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 16px;
+    margin-left: auto;
+}
+
+.deepread-clear-btn:hover {
+    background-color: #e0e0e0;
+    color: #f44336;
+}
+
+/* 区域标题栏 */
+.deepread-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+/* 标题栏按钮组 */
+.deepread-header-buttons {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+}
+
+/* 返回全文按钮、插入对话按钮和删除概念按钮 */
+.deepread-return-btn, .deepread-insert-chat-btn, .deepread-delete-concept-btn {
+    background-color: #f0f0f0;
+    color: #555;
+    border: 1px solid #ddd;
+    padding: 5px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.deepread-return-btn:hover, .deepread-insert-chat-btn:hover, .deepread-delete-concept-btn:hover {
+    background-color: #e0e0e0;
+    color: #1a73e8;
+}
+
+/* 插入对话按钮 */
+.deepread-insert-chat-btn {
+    background-color: #f0f8ff;
+    color: #4CAF50;
+    border: 1px solid #e0f2e0;
+}
+
+.deepread-insert-chat-btn:hover {
+    background-color: #e0f2e0;
+    color: #2e7d32;
+}
+
+/* 删除概念按钮 */
+.deepread-delete-concept-btn {
+    background-color: #fff0f0;
+    color: #e57373;
+    border: 1px solid #ffcdd2;
+}
+
+.deepread-delete-concept-btn:hover {
+    background-color: #ffebee;
+    color: #c62828;
+}
+
+/* 概念导航按钮 */
+.deepread-concept-nav-btn {
+    background-color: #f0f0f0;
+    color: #555;
+    border: 1px solid #ddd;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 16px;
+}
+
+.deepread-concept-nav-btn:hover {
+    background-color: #e0e0e0;
+}
+
+.deepread-concept-nav-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* 浮动按钮 */
+.deepread-float-button {
+    position: absolute;
+    background-color: #4CAF50;
+    color: white;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    cursor: pointer;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    z-index: 9998;
+    font-family: 'Microsoft YaHei', Arial, sans-serif;
+    transition: transform 0.2s ease, background-color 0.2s ease;
+}
+
+.deepread-float-button:hover {
+    transform: scale(1.1);
+    background-color: #4CAF50;
+}
+
+/* 文本编辑器 */
+.deepread-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.deepread-text-editor {
+    width: 100%;
+    min-height: 500px;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-family: 'Microsoft YaHei', Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    resize: vertical;
+}
+
+.deepread-btn {
+    background-color: var(--deepread-primary);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 16px;
+    margin: 10px 0;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.3s;
+}
+
+.deepread-small-btn {
+    padding: 4px 8px;
+    margin: 0 0 0 10px;
+    font-size: 12px;
+    vertical-align: middle;
+}
+
+.deepread-editor button:hover {
+    background-color: #4CAF50;
+}
+
+/* 概念解释样式 */
+.deepread-response h3 {
+    margin-top: 0;
+    color: #333;
+    font-size: 18px;
+    border-bottom: 1px solid #eee;
+    /* padding-bottom: 8px; */
+}
+
+.deepread-response p {
+    color: #444;
+    line-height: 1.6;
+    font-size: 14px;
+}
+
+.deepread-navigate-btn:hover {
+    background-color: #e0e0e0;
+}
+
+/* 高亮样式 */
+.deepread-highlight {
+    background-color: rgba(76, 175, 80, 0.2);
+    border-left: 3px solid #4CAF50;
+    padding-left: 10px;
+    animation: highlight-fade 2s ease;
+}
+
+@keyframes highlight-fade {
+    0% { background-color: rgba(76, 175, 80, 0.5); }
+    100% { background-color: rgba(76, 175, 80, 0.2); }
+}
+
+/* 概念标签样式 绿色虚线 */
+.deepread-concept {
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-decoration-color: #4CAF50;
+    color: inherit;
+    cursor: pointer;
+    position: relative;
+}
+
+.deepread-concept:hover {
+    background-color: rgba(76, 175, 80, 0.1);
+}
+
+.deepread-concept-active {
+    background-color: rgba(76, 175, 80, 0.2);
+    font-weight: bold;
+}
+
+/* 对话界面样式 高度最低150 */
+.deepread-chat-section {
+    margin-top: 5px;
+    border-top: 1px solid #eee;
+    padding-top: 5px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 150px; /* 确保最小高度 */
+    overflow: hidden; /* 防止内容溢出 */
+}
+
+.deepread-chat-section h3 {
+    font-size: 16px;
+    color: #333;
+    margin-top: 0;
+    /* margin-bottom: 10px; */
+}
+
+.deepread-chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 5px;
+    background-color: #f9f9f9;
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    min-height: 100px;
+    max-height: calc(100% - 10px); /* 留出标题的空间 */
+}
+
+.deepread-chat-message {
+    margin-bottom: 5px;
+    padding: 5px 5px 5px 20px;
+    border-radius: 4px;
+    max-width: 85%;
+    word-wrap: break-word;
+    position: relative;
+}
+
+/* 聊天消息操作按钮容器 */
+.deepread-chat-message-actions {
+    position: absolute;
+    right: 5px;
+    top: 5px;
+    display: none;
+    gap: 5px;
+}
+
+.deepread-chat-message:hover .deepread-chat-message-actions {
+    display: flex;
+}
+
+/* 聊天消息操作按钮 */
+.deepread-chat-action-btn {
+    background-color: rgba(255, 255, 255, 0.8);
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 12px;
+    color: #555;
+    transition: all 0.2s ease;
+}
+
+.deepread-chat-action-btn:hover {
+    background-color: #f0f0f0;
+}
+
+.deepread-chat-action-copy:hover {
+    color: #2196F3;
+    border-color: #2196F3;
+}
+
+.deepread-chat-action-delete:hover {
+    color: #e57373;
+    border-color: #ffcdd2;
+}
+
+/* 生成图像相关样式 */
+.deepread-generated-images {
+    margin: 10px 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.deepread-image-container {
+    margin: 5px 0;
+    max-width: 100%;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+.deepread-generated-image {
+    max-width: 100%;
+    height: auto;
+    display: block;
+}
+
+.deepread-chat-messages code {
+  background-color: #f5f5f5;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: monospace;
+}
+
+.deepread-chat-messages pre {
+  background-color: #f5f5f5;
+  padding: 5px;
+  border-radius: 5px;
+  overflow-x: auto;
+}
+
+.deepread-chat-messages table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 10px 0;
+}
+
+.deepread-chat-messages th, .deepread-chat-messages td {
+  border: 1px solid #ddd;
+  padding: 5px;
+  text-align: left;
+}
+
+.deepread-chat-message-user {
+    background-color: #DCF8C6;
+    align-self: flex-end;
+    margin-left: auto;
+}
+
+.deepread-chat-message-assistant {
+    background-color: #ECECEC;
+    align-self: flex-start;
+}
+
+
+/* 底部 */
+.deepread-footer {
+    border-top: 1px solid var(--deepread-border-light);
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background-color: var(--deepread-bg-main) !important;
+    color: var(--deepread-text) !important;
+    z-index: 100;
+    width: auto;
+}
+
+/* 底部输入框 */
+.deepread-chat-input-container {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+    padding: 5px;
+    background-color: var(--deepread-bg-tertiary) !important;
+    border-top: 1px solid var(--deepread-border) !important;
+}
+
+.deepread-chat-input {
+    flex: 1;
+    padding: 5px;
+    border: 1px solid var(--deepread-border) !important;
+    border-radius: 4px;
+    resize: none;
+    font-size: 14px !important;
+    height: 7%;
+    min-height: 70px;
+    max-height: 70px;
+    overflow-y: auto;
+    font-family: 'Microsoft YaHei', Arial, sans-serif;
+    background-color: white !important;
+    color: var(--deepread-text) !important;
+}
+
+.deepread-chat-send {
+    background-color: var(--deepread-primary) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 4px !important;
+    padding: 0 15px !important;
+    cursor: pointer !important;
+    font-size: 14px !important;
+    height: 70px !important;
+    min-width: 60px !important;
+}
+
+.deepread-chat-send:hover {
+    background-color: var(--deepread-primary-hover) !important;
+}
+
+/* 确保样式不受页面影响 */
+.deepread-container *,
+.deepread-float-button {
+    box-sizing: border-box;
+    font-family: 'Microsoft YaHei', Arial, sans-serif;
+}
+
+
+/* 设置面板样式 */
+.deepread-settings-panel {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 500px;
+    max-width: 90vw;
+    background-color: #fff;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    z-index: 10000;
+    font-family: 'Microsoft YaHei', Arial, sans-serif;
+    overflow: hidden;
+}
+
+.deepread-settings-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px 20px;
+    background-color: #4CAF50;
+    color: white;
+}
+
+.deepread-settings-header h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 500;
+}
+
+.deepread-settings-content {
+    padding: 20px;
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+.deepread-settings-section {
+    margin-bottom: 20px;
+}
+
+.deepread-settings-section h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-size: 16px;
+    color: #333;
+}
+
+.deepread-settings-item {
+    margin-bottom: 15px;
+}
+
+.deepread-settings-item label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 500;
+    color: #555;
+}
+
+.deepread-settings-input {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    margin-bottom: 5px;
+}
+
+.deepread-settings-hint {
+    margin: 5px 0 0;
+    font-size: 12px;
+    color: #888;
+}

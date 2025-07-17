@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "DeepRead - 深度阅读助手",
+  "version": "1.0",
+  "description": "提供智能解读和交互式导航的深度阅读助手",
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["showdown.min.js", "cache-manager.js", "gemini_mcp_client.js", "content.js"],
+      "css": ["deepread.css"],
+      "run_at": "document_end"
+    }
+  ],
+  "permissions": ["storage", "tabs", "activeTab", "scripting"],
+  "host_permissions": ["https://generativelanguage.googleapis.com/*", "<all_urls>"]
+}
