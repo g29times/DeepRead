@@ -17,7 +17,7 @@ const api_url = "http://localhost:8009/api";
 async function addMemory(data, options = {}) {
     // 设置默认值
     const {
-        type = 'message',
+        type = 'single_message', // single_message 单条消息 chat_session 多轮聊天对话
         agentId = 'gemini',
         userId = 'neo',
         role = 'user'
@@ -41,7 +41,7 @@ async function addMemory(data, options = {}) {
         
         // 准备请求数据
         let mcpData, userCommand, messageContent;
-        if (type === 'chat_history') {
+        if (type === 'chat_session') {
             // 处理聊天历史数组
             const chatHistory = Array.isArray(data) ? data : [data];
             if (chatHistory.length === 0) {
@@ -64,7 +64,7 @@ async function addMemory(data, options = {}) {
                 agent_id: agentId,
                 user_id: userId
             };
-        } else {
+        } else if (type === 'single_message') {
             // 处理单条消息
             messageContent = typeof data === 'string' ? data : 
                                (data.message || data.content || JSON.stringify(data));
@@ -73,13 +73,17 @@ async function addMemory(data, options = {}) {
             userCommand = "保存这条信息到记忆库 ";
             console.log("options --->", options);
             mcpData = {
+                role: options.role,
                 content: messageContent,
                 source: currentUrl,
                 title: pageTitle,
                 agent_id: agentId,
-                user_id: userId,
-                role: options.role
+                user_id: userId
             };
+        } else {
+            // 未知类型，不处理
+            console.error('未知类型，不处理');
+            return { success: false, reason: '未知类型' };
         }
         
         // 发送请求

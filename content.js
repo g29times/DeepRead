@@ -2225,8 +2225,9 @@ async function sendChatMessage() {
             selectedImages = []; // 清空数组
             renderImagePreviews(); // 更新UI，移除所有预览
         }
+        // MCP记忆回答
         addMemory(response, {
-            type: 'message',
+            type: 'single_message',
             role: 'assistant'
         });
     } catch (error) {
@@ -2247,7 +2248,7 @@ async function getChatResponse(userMessage, chatHistory = [], pageContent = '', 
     debugLog('开始获取聊天回答，用户消息：' + userMessage);
     debugLog('聊天历史长度：' + chatHistory.length);
     
-    // 先搜索相关记忆（如果MCP功能已启用）
+    // 先搜索相关记忆 MCP
     let relatedMemories = [];
     try {
         relatedMemories = await searchMemories(userMessage, pageContent);
