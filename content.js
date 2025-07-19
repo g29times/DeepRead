@@ -311,8 +311,19 @@ function createDeepReadPanel() {
     const chatInput = document.createElement('textarea');
     chatInput.id = 'deepread-chat-input';
     chatInput.className = 'deepread-chat-input';
-    chatInput.placeholder = '输入您的问题... (Shift+Enter 换行)';
+    chatInput.placeholder = '输入您的问题... (Shift+Enter 发送)'; // 更新提示
     chatInput.rows = 1;
+
+    // 添加键盘事件监听，实现 Enter 换行, Shift+Enter 发送
+    chatInput.addEventListener('keydown', (event) => {
+        // 当按下 Shift + Enter 时发送消息
+        if (event.key === 'Enter' && event.shiftKey) {
+            event.preventDefault(); // 阻止默认的换行行为
+            // 直接调用发送消息的函数
+            sendChatMessage();
+        }
+        // 单独按下 Enter 时，保持默认的换行行为，此处无需代码
+    });
 
     // 图片上传按钮
     const uploadButton = document.createElement('button');
@@ -330,6 +341,22 @@ function createDeepReadPanel() {
 
     uploadButton.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', handleImageUpload);
+
+    // 为聊天输入框添加粘贴事件监听
+    chatInput.addEventListener('paste', (event) => {
+        // 从剪贴板获取文件
+        const files = event.clipboardData?.files;
+        if (files && files.length > 0) {
+            // 筛选出图片文件
+            const imageFiles = Array.from(files).filter(file => file.type.startsWith('image/'));
+            if (imageFiles.length > 0) {
+                // 阻止默认的粘贴行为（如将文件路径粘贴到输入框）
+                event.preventDefault();
+                // 处理图片文件
+                addImagesToPreview(imageFiles);
+            }
+        }
+    });
 
     // 创建一个新的行容器来包裹输入框和按钮
     const inputRowContainer = document.createElement('div');
@@ -2087,28 +2114,39 @@ function mockChatResponse(message) {
 
 let selectedImages = []; // 用于存储待上传的图片, {id, data}
 
-// 处理图片上传
+// 处理来自文件输入框的图片上传
 function handleImageUpload(event) {
     const files = event.target.files;
-    if (!files.length) {
+    if (files && files.length > 0) {
+        addImagesToPreview(files);
+        // 清空文件输入框，以便用户可以再次选择相同的文件
+        event.target.value = '';
+    }
+}
+
+// 将文件添加到预览区的核心函数
+function addImagesToPreview(files) {
+    if (!files || files.length === 0) {
         return;
     }
 
-    // 遍历所有选择的文件
+    // 遍历所有文件
     Array.from(files).forEach(file => {
+        // 确保是图片文件
+        if (!file.type.startsWith('image/')) {
+            return;
+        }
+
         const reader = new FileReader();
         reader.onload = function(e) {
             // 为每个图片生成一个唯一ID
             const imageId = 'img_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-            selectedImages.push({ id: imageId, data: e.target.result });
+            selectedImages.push({ id: imageId, data: e.target.result, file: file }); // 同时保存原始File对象
             // 添加后立即重新渲染所有预览
             renderImagePreviews();
         };
         reader.readAsDataURL(file);
     });
-
-    // 清空文件输入框，以便用户可以再次选择相同的文件
-    event.target.value = '';
 }
 
 // 移除选择的图片
