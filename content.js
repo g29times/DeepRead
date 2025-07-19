@@ -659,7 +659,12 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
                 topP: 0.95,
                 topK: 64,
                 maxOutputTokens: 8192
-            }
+            },
+            tools: [
+              {
+                googleSearch: {}
+              },
+            ],
         };
         
         debugLog(`发送 ${apiType} 请求到 Google Gemini API \n ${API_URL}`);
@@ -667,10 +672,10 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
         // 创建AbortController来设置超时
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 300000); // 300秒超时
-        
+        // 发送请求
         let response;
         try {
-            // 发送请求
+            
             response = await fetch(API_URL, {
                 method: 'POST',
                 headers: {
@@ -707,87 +712,397 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
         // 解析响应
         const responseData = await response.json();
         
-        // 提取文本回答
+        // 使用新的解析函数处理响应
+        return parseGeminiResponse(responseData, apiType, expectJson, fallbackResponse);
+    } catch (error) {
+        console.error(`${apiType} 调用出错:`, error);
+        // 返回预设的回退响应
+        return fallbackResponse;
+    }
+}
+
+/**
+ * 解析Gemini API的响应，处理带有groundingMetadata的搜索结果
+ * @param {Object} responseData API返回的原始响应数据
+ * @param {string} apiType 调用类型，用于日志记录和错误处理
+ * @param {boolean} expectJson 是否期望返回结果是JSON
+ * @param {Object} fallbackResponse 当出错时的预设回退响应
+ * @returns {Object|string} 处理后的响应结果
+ */
+function parseGeminiResponse(responseData, apiType, expectJson = false, fallbackResponse = {}) {
+    try {
+        // 检查响应中是否包含候选项
         if (responseData.candidates && responseData.candidates[0] && 
             responseData.candidates[0].content && responseData.candidates[0].content.parts) {
-            const responseText = responseData.candidates[0].content.parts[0].text;
+            
+            const candidate = responseData.candidates[0];
+            const responseText = candidate.content.parts[0].text;
             debugLog(`${apiType} Google Gemini API 收到的原始响应文本: ${responseText}`);
             
-            // 如果期望返回 JSON
-            if (expectJson) {
-                try {
-                    // 尝试解析JSON响应，只有当响应是字符串时才需要解析
-                    if (typeof responseText === 'string') {
-                        // 处理Markdown代码块格式，如果是```json ... ```格式
-                        let processedText = responseText;
-                        
-                        // 检查是否是Markdown代码块
-                        const jsonCodeBlockRegex = /```(?:json)?\s*([\s\S]*?)```/;
-                        const match = processedText.match(jsonCodeBlockRegex);
-                        
-                        if (match && match[1]) {
-                            debugLog(`${apiType} 检测到Markdown代码块格式，正在提取JSON内容`);
-                            processedText = match[1].trim();
-                        }
-                        
-                        // 尝试修复常见的JSON格式错误
-                        processedText = fixCommonJsonErrors(processedText);
-                        
-                        // 检查处理后的文本是否是JSON格式
-                        if (processedText.trim().startsWith('{') && processedText.trim().endsWith('}')) {
-                            // console.log(`${apiType} 提取的JSON内容:`, processedText);
-                            try {
-                                return JSON.parse(processedText);
-                            } catch (jsonError) {
-                                console.error(`${apiType} JSON解析错误:`, jsonError, '尝试使用安全的JSON解析方法');
-                                
-                                // 尝试使用更安全的方法解析JSON
+            // 检查是否包含groundingMetadata（搜索结果）
+            if (candidate.groundingMetadata) {
+                debugLog(`${apiType} 检测到groundingMetadata，处理搜索结果引用`);
+                
+                // 处理搜索结果
+                const processedResponse = processGroundingMetadata(responseText, candidate.groundingMetadata);
+                
+                // 如果期望返回JSON，但处理后的响应不是JSON格式
+                if (expectJson) {
+                    try {
+                        // 尝试将处理后的响应转换为JSON
+                        if (typeof processedResponse === 'string') {
+                            // 处理Markdown代码块格式
+                            let processedText = processedResponse;
+                            
+                            // 检查是否是Markdown代码块
+                            const jsonCodeBlockRegex = /```(?:json)?\s*([\s\S]*?)```/;
+                            const match = processedText.match(jsonCodeBlockRegex);
+                            
+                            if (match && match[1]) {
+                                debugLog(`${apiType} 检测到Markdown代码块格式，正在提取JSON内容`);
+                                processedText = match[1].trim();
+                            }
+                            
+                            // 尝试修复常见的JSON格式错误
+                            processedText = fixCommonJsonErrors(processedText);
+                            
+                            // 检查处理后的文本是否是JSON格式
+                            if (processedText.trim().startsWith('{') && processedText.trim().endsWith('}')) {
                                 try {
-                                    // 使用手动修复常见的JSON问题
-                                    const manuallyFixedJson = manualJsonFix(processedText);
-                                    debugLog('手动修复后的JSON:' + manuallyFixedJson);
+                                    return JSON.parse(processedText);
+                                } catch (jsonError) {
+                                    console.error(`${apiType} JSON解析错误:`, jsonError, '尝试使用安全的JSON解析方法');
                                     
-                                    // 尝试解析手动修复的JSON
-                                    const jsonObj = JSON.parse(manuallyFixedJson);
-                                    debugLog('使用手动修复方法成功');
-                                    return jsonObj;
-                                } catch (fixError) {
-                                    console.error('手动修复方法失败:', fixError);
-                                    // 如果手动修复失败，使用预设的回退响应
-                                    debugLog('使用预设的回退响应');
-                                    return fallbackResponse;
+                                    // 尝试使用更安全的方法解析JSON
+                                    try {
+                                        // 使用手动修复常见的JSON问题
+                                        const manuallyFixedJson = manualJsonFix(processedText);
+                                        debugLog('手动修复后的JSON:' + manuallyFixedJson);
+                                        
+                                        // 尝试解析手动修复的JSON
+                                        const jsonObj = JSON.parse(manuallyFixedJson);
+                                        debugLog('使用手动修复方法成功');
+                                        return jsonObj;
+                                    } catch (fixError) {
+                                        console.error('手动修复方法失败:', fixError);
+                                        // 如果手动修复失败，使用预设的回退响应
+                                        debugLog('使用预设的回退响应');
+                                        return fallbackResponse;
+                                    }
                                 }
+                            } else {
+                                // 如果不是JSON格式，返回预设的回退响应
+                                debugLog(`${apiType} 响应不是JSON格式，使用原始文本`);
+                                // 将原始文本放入预设对象的第一个属性
+                                const firstKey = Object.keys(fallbackResponse)[0];
+                                if (firstKey) {
+                                    fallbackResponse[firstKey] = processedText;
+                                }
+                                return fallbackResponse;
                             }
-                        } else {
-                            // 如果不是JSON格式，返回预设的回退响应
-                            debugLog(`${apiType} 响应不是JSON格式，使用原始文本`);
-                            // 将原始文本放入预设对象的第一个属性
-                            const firstKey = Object.keys(fallbackResponse)[0];
-                            if (firstKey) {
-                                fallbackResponse[firstKey] = processedText;
-                            }
-                            return fallbackResponse;
+                        } else if (typeof processedResponse === 'object') {
+                            // 如果已经是对象，直接返回
+                            return processedResponse;
                         }
-                    } else if (typeof responseText === 'object') {
-                        // 如果已经是对象，直接返回
-                        return responseText;
+                    } catch (parseError) {
+                        console.error(`${apiType} 解析JSON响应时出错:`, parseError);
+                        // 如果无法解析，返回预设的回退响应
+                        return fallbackResponse;
                     }
-                } catch (parseError) {
-                    console.error(`${apiType} 解析JSON响应时出错:`, parseError);
-                    // 如果无法解析，返回预设的回退响应
-                    return fallbackResponse;
+                } else {
+                    // 直接返回处理后的文本
+                    return processedResponse;
                 }
             } else {
-                // 直接返回文本
-                return responseText;
+                // 没有groundingMetadata，按原来的方式处理
+                if (expectJson) {
+                    try {
+                        // 尝试解析JSON响应，只有当响应是字符串时才需要解析
+                        if (typeof responseText === 'string') {
+                            // 处理Markdown代码块格式，如果是```json ... ```格式
+                            let processedText = responseText;
+                            
+                            // 检查是否是Markdown代码块
+                            const jsonCodeBlockRegex = /```(?:json)?\s*([\s\S]*?)```/;
+                            const match = processedText.match(jsonCodeBlockRegex);
+                            
+                            if (match && match[1]) {
+                                debugLog(`${apiType} 检测到Markdown代码块格式，正在提取JSON内容`);
+                                processedText = match[1].trim();
+                            }
+                            
+                            // 尝试修复常见的JSON格式错误
+                            processedText = fixCommonJsonErrors(processedText);
+                            
+                            // 检查处理后的文本是否是JSON格式
+                            if (processedText.trim().startsWith('{') && processedText.trim().endsWith('}')) {
+                                try {
+                                    return JSON.parse(processedText);
+                                } catch (jsonError) {
+                                    console.error(`${apiType} JSON解析错误:`, jsonError, '尝试使用安全的JSON解析方法');
+                                    
+                                    // 尝试使用更安全的方法解析JSON
+                                    try {
+                                        // 使用手动修复常见的JSON问题
+                                        const manuallyFixedJson = manualJsonFix(processedText);
+                                        debugLog('手动修复后的JSON:' + manuallyFixedJson);
+                                        
+                                        // 尝试解析手动修复的JSON
+                                        const jsonObj = JSON.parse(manuallyFixedJson);
+                                        debugLog('使用手动修复方法成功');
+                                        return jsonObj;
+                                    } catch (fixError) {
+                                        console.error('手动修复方法失败:', fixError);
+                                        // 如果手动修复失败，使用预设的回退响应
+                                        debugLog('使用预设的回退响应');
+                                        return fallbackResponse;
+                                    }
+                                }
+                            } else {
+                                // 如果不是JSON格式，返回预设的回退响应
+                                debugLog(`${apiType} 响应不是JSON格式，使用原始文本`);
+                                // 将原始文本放入预设对象的第一个属性
+                                const firstKey = Object.keys(fallbackResponse)[0];
+                                if (firstKey) {
+                                    fallbackResponse[firstKey] = processedText;
+                                }
+                                return fallbackResponse;
+                            }
+                        } else if (typeof responseText === 'object') {
+                            // 如果已经是对象，直接返回
+                            return responseText;
+                        }
+                    } catch (parseError) {
+                        console.error(`${apiType} 解析JSON响应时出错:`, parseError);
+                        // 如果无法解析，返回预设的回退响应
+                        return fallbackResponse;
+                    }
+                } else {
+                    // 直接返回文本
+                    return responseText;
+                }
             }
         } else {
             throw new Error(`${apiType} 响应格式不符合预期`);
         }
     } catch (error) {
-        console.error(`${apiType} 调用出错:`, error);
-        // 返回预设的回退响应
-        return fallbackResponse;
+        console.error(`${apiType} 解析响应时出错:`, error);
+        return expectJson ? fallbackResponse : (typeof fallbackResponse === 'string' ? fallbackResponse : '处理响应时出错');
+    }
+}
+
+/**
+ * 处理Gemini API返回的groundingMetadata，添加引用标记和Sources区块
+ * @param {string} responseText 原始响应文本
+ * @param {Object} groundingMetadata 搜索元数据
+ * @returns {string} 处理后的响应文本，包含引用标记和Sources区块
+ */
+function processGroundingMetadata(responseText, groundingMetadata) {
+    try {
+        // 如果没有groundingMetadata或者groundingSupports，直接返回原文
+        if (!groundingMetadata || !groundingMetadata.groundingSupports || !groundingMetadata.groundingChunks) {
+            return responseText;
+        }
+        
+        debugLog('处理groundingMetadata，添加引用标记和Sources区块');
+        debugLog('groundingSupports 数量:', groundingMetadata.groundingSupports.length);
+        debugLog('groundingChunks 数量:', groundingMetadata.groundingChunks.length);
+        
+        // 首先收集所有唯一的引用源
+        const sources = [];
+        const sourceMap = new Map(); // 用于去重
+        
+        // 遍历所有groundingChunks，收集唯一的源
+        groundingMetadata.groundingChunks.forEach((chunk, index) => {
+            if (chunk && chunk.web) {
+                const { uri, title } = chunk.web;
+                if (!sourceMap.has(uri)) {
+                    sourceMap.set(uri, sources.length + 1); // 索引从1开始
+                    sources.push({ uri, title });
+                    debugLog(`添加源 ${sources.length}: ${title || uri}`);
+                }
+            }
+        });
+        
+        // 创建一个副本，避免修改原始文本
+        let processedText = responseText;
+        debugLog('原始文本长度:', responseText.length);
+        
+        // 按照endIndex从大到小排序，这样我们可以从后向前插入引用标记，避免位置偏移
+        const sortedSupports = [...groundingMetadata.groundingSupports].sort((a, b) => 
+            b.segment.endIndex - a.segment.endIndex
+        );
+        
+        debugLog('按endIndex排序后的supports:');
+        sortedSupports.forEach((support, index) => {
+            if (support.segment) {
+                debugLog(`Support ${index}: startIndex=${support.segment.startIndex}, endIndex=${support.segment.endIndex}`);
+                debugLog(`  段落文本: "${support.segment.text ? support.segment.text.substring(0, 100) : 'undefined'}..."`);
+                debugLog(`  引用索引: [${support.groundingChunkIndices.join(', ')}]`);
+            } else {
+                debugLog(`Support ${index}: 没有segment`);
+            }
+        });
+        
+        // 创建一个映射来跟踪每个segment的处理状态
+        const segmentProcessed = new Set();
+        
+        // 遍历每个支持段落，从后向前添加引用标记
+        for (let i = 0; i < sortedSupports.length; i++) {
+            const support = sortedSupports[i];
+            const { segment, groundingChunkIndices } = support;
+            
+            if (!segment || !segment.text) {
+                debugLog(`Support ${i}: 没有segment或segment.text，跳过`);
+                continue;
+            }
+            
+            const expectedText = segment.text;
+            // 使用更精确的segmentKey，包含位置信息避免误判
+            const segmentKey = `${segment.startIndex || 0}_${segment.endIndex}_${expectedText.substring(0, 50)}`;
+            
+            // 避免重复处理相同的segment
+            if (segmentProcessed.has(segmentKey)) {
+                debugLog(`Support ${i}: segment已处理过，跳过`);
+                continue;
+            }
+            
+            debugLog(`Support ${i}: 处理segment "${expectedText.substring(0, 50)}..."`);
+            debugLog(`Support ${i}: 完整segment文本: "${expectedText}"`);
+            debugLog(`Support ${i}: segment长度: ${expectedText.length}`);
+            
+            // 在当前处理的文本中查找匹配的段落
+            let foundIndex = -1;
+            let searchStartIndex = 0;
+            
+            // 尝试多次搜索，以防有重复文本
+            while (true) {
+                const tempIndex = processedText.indexOf(expectedText, searchStartIndex);
+                if (tempIndex === -1) break;
+                
+                // 检查这个位置是否已经被处理过（是否已经有引用标记）
+                const afterText = processedText.substring(tempIndex + expectedText.length, tempIndex + expectedText.length + 50);
+                if (!afterText.includes('<a href=')) {
+                    foundIndex = tempIndex;
+                    break;
+                }
+                
+                searchStartIndex = tempIndex + 1;
+            }
+            
+            if (foundIndex === -1) {
+                debugLog(`Support ${i}: 未找到匹配文本`);
+                // 添加更详细的调试信息
+                debugLog(`Support ${i}: 原文长度: ${processedText.length}`);
+                debugLog(`Support ${i}: 尝试模糊匹配...`);
+                
+                // 尝试去掉空格和换行符的匹配
+                const normalizedExpected = expectedText.replace(/\s+/g, ' ').trim();
+                const normalizedProcessed = processedText.replace(/\s+/g, ' ');
+                const fuzzyIndex = normalizedProcessed.indexOf(normalizedExpected);
+                
+                if (fuzzyIndex !== -1) {
+                    debugLog(`Support ${i}: 模糊匹配成功，位置: ${fuzzyIndex}`);
+                    
+                    // 根据模糊匹配的位置，在原文中找到实际位置
+                    // 计算在原文中的大概位置
+                    let charCount = 0;
+                    let realIndex = -1;
+                    
+                    for (let j = 0; j < processedText.length; j++) {
+                        if (processedText[j] !== ' ' && processedText[j] !== '\n' && processedText[j] !== '\t') {
+                            if (charCount === fuzzyIndex) {
+                                realIndex = j;
+                                break;
+                            }
+                            charCount++;
+                        }
+                    }
+                    
+                    // 从找到的位置开始，寻找最佳匹配
+                    if (realIndex !== -1) {
+                        // 在附近区域搜索最佳匹配
+                        const searchStart = Math.max(0, realIndex - 50);
+                        const searchEnd = Math.min(processedText.length, realIndex + expectedText.length + 50);
+                        const searchArea = processedText.substring(searchStart, searchEnd);
+                        
+                        // 尝试找到最佳匹配位置
+                        const bestMatch = searchArea.indexOf(expectedText.substring(0, 10)); // 用前10个字符匹配
+                        if (bestMatch !== -1) {
+                            foundIndex = searchStart + bestMatch;
+                            debugLog(`Support ${i}: 找到最佳匹配位置: ${foundIndex}`);
+                        }
+                    }
+                }
+                
+                if (foundIndex === -1) {
+                    debugLog(`Support ${i}: 所有匹配方法都失败`);
+                    continue;
+                }
+            }
+            
+            const correctedEndIndex = foundIndex + expectedText.length;
+            debugLog(`Support ${i}: 在位置 ${foundIndex}-${correctedEndIndex} 找到匹配文本`);
+            
+            // 收集该段落引用的所有源
+            const citations = new Set();
+            for (const chunkIndex of groundingChunkIndices) {
+                if (chunkIndex < groundingMetadata.groundingChunks.length) {
+                    const chunk = groundingMetadata.groundingChunks[chunkIndex];
+                    if (chunk && chunk.web) {
+                        const { uri } = chunk.web;
+                        const sourceIndex = sourceMap.get(uri);
+                        if (sourceIndex) {
+                            citations.add(sourceIndex);
+                        }
+                    }
+                }
+            }
+            
+            if (citations.size > 0) {
+                // 将引用编号排序后生成HTML链接
+                const sortedCitations = Array.from(citations).sort((a, b) => a - b);
+                const citationStr = sortedCitations.map(idx => {
+                    const source = sources[idx - 1];
+                    if (source) {
+                        return `<a href="${source.uri}" target="_blank" style="color: #1a73e8; text-decoration: none; font-weight: 500;">[${idx}]</a>`;
+                    }
+                    return `[${idx}]`;
+                }).join('');
+                
+                // 在段落末尾插入引用标记
+                processedText = processedText.substring(0, correctedEndIndex) + 
+                               citationStr + 
+                               processedText.substring(correctedEndIndex);
+                
+                debugLog(`Support ${i}: 添加引用 ${citationStr}`);
+                
+                // 标记这个segment已经处理过
+                segmentProcessed.add(segmentKey);
+            } else {
+                debugLog(`Support ${i}: 没有找到有效的引用源`);
+            }
+        }
+        
+        debugLog(`总共处理了 ${segmentProcessed.size} 个segment`);
+        
+        // 如果有引用源，添加Sources区块
+        if (sources.length > 0) {
+            // 在文本末尾添加空行和Sources区块
+            processedText += '\n\n**Sources** \n';
+            
+            // 添加每个源的信息，带有超链接
+            sources.forEach((source, index) => {
+                const displayTitle = source.title || new URL(source.uri).hostname;
+                processedText += `${index + 1}. <a href="${source.uri}" target="_blank" style="color: #1a73e8; text-decoration: none;">${displayTitle}</a>\n`;
+            });
+        }
+        
+        debugLog('处理后文本长度:', processedText.length);
+        return processedText;
+    } catch (error) {
+        console.error('处理groundingMetadata时出错:', error);
+        return responseText; // 出错时返回原始文本
     }
 }
 
