@@ -300,28 +300,60 @@ function createDeepReadPanel() {
     // 添加输入区域
     const chatInputContainer = document.createElement('div');
     chatInputContainer.className = 'deepread-chat-input-container';
-    
+    chatInputContainer.style.flexDirection = 'column'; // 垂直布局
+
+    // 图片预览区
+    const imagePreviewContainer = document.createElement('div');
+    imagePreviewContainer.id = 'deepread-image-preview-container';
+    imagePreviewContainer.className = 'deepread-image-preview-container';
+    imagePreviewContainer.style.display = 'none'; // 默认隐藏
+
     const chatInput = document.createElement('textarea');
     chatInput.id = 'deepread-chat-input';
     chatInput.className = 'deepread-chat-input';
-    chatInput.placeholder = '输入您的问题...';
-    chatInput.addEventListener('keydown', function(e) {
-        // 按Enter键发送消息，除非同时按下Shift键
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendChatMessage();
-        }
-    });
-    
+    chatInput.placeholder = '输入您的问题... (Shift+Enter 换行)';
+    chatInput.rows = 1;
+
+    // 图片上传按钮
+    const uploadButton = document.createElement('button');
+    uploadButton.id = 'deepread-chat-upload';
+    uploadButton.className = 'deepread-chat-upload';
+    uploadButton.innerHTML = '&#128247;'; // emoji for image
+    uploadButton.title = '上传图片';
+
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'image/*';
+    fileInput.multiple = true; // 允许多文件上传
+    fileInput.style.display = 'none';
+    fileInput.id = 'deepread-image-input';
+
+    uploadButton.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', handleImageUpload);
+
+    // 创建一个新的行容器来包裹输入框和按钮
+    const inputRowContainer = document.createElement('div');
+    inputRowContainer.className = 'deepread-input-row-container';
+    inputRowContainer.style.display = 'flex';
+    inputRowContainer.style.flexDirection = 'row';
+    inputRowContainer.style.width = '100%';
+    inputRowContainer.style.alignItems = 'flex-end'; // 垂直对齐
+
+    // 将输入框和按钮添加到行容器
+    inputRowContainer.appendChild(chatInput);
+    inputRowContainer.appendChild(uploadButton);
+    inputRowContainer.appendChild(fileInput);
+
     const sendButton = document.createElement('button');
     sendButton.id = 'deepread-chat-send';
     sendButton.className = 'deepread-chat-send';
     sendButton.textContent = '发送';
     sendButton.addEventListener('click', sendChatMessage);
-    
-    // 组装底部输入区
-    chatInputContainer.appendChild(chatInput);
-    chatInputContainer.appendChild(sendButton);
+    inputRowContainer.appendChild(sendButton);
+
+    // 将图片预览和行容器添加到主容器
+    chatInputContainer.appendChild(imagePreviewContainer);
+    chatInputContainer.appendChild(inputRowContainer);
     footer.appendChild(chatInputContainer);
 
     // 组装面板
@@ -569,7 +601,7 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
         }
         
         // 使用用户配置的MODEL，如果没有则使用默认值
-        let MODEL_ID = 'gemma-3-27b-it'; // 默认值
+        let MODEL_ID = 'gemini-2.5-flash-lite-preview-06-17'; // 默认值
         
         // 尝试从存储中获取用户配置的MODEL
         if (isExtensionEnvironment && chrome.storage) {
@@ -652,7 +684,7 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
         if (responseData.candidates && responseData.candidates[0] && 
             responseData.candidates[0].content && responseData.candidates[0].content.parts) {
             const responseText = responseData.candidates[0].content.parts[0].text;
-            debugLog(`${apiType} 收到的原始响应文本: ${responseText}`);
+            debugLog(`${apiType} Google Gemini API 收到的原始响应文本: ${responseText}`);
             
             // 如果期望返回 JSON
             if (expectJson) {
@@ -761,11 +793,11 @@ async function callGeminiDrawAPI(contents, apiType, expectJson = false, fallback
             alert('请先在设置面板中设置您的 API Key，然后刷新页面！');
             throw new Error('未设置 API Key，请在设置面板中设置您的 Google Gemini API Key');
         }
-        
+
         // 使用用户配置的MODEL，如果没有则使用默认值
         // 注意：对于多模态，我们需要使用支持图像生成的模型
-        let MODEL_ID = 'gemini-2.5-flash';
-				// 'gemini-2.0-flash-preview-image-generation'; // 默认值
+        let MODEL_ID = 'gemini-2.5-flash-lite-preview-06-17';
+		// 'gemini-2.0-flash-preview-image-generation'; // 默认值
         
         // 尝试从存储中获取用户配置的MODEL
         if (isExtensionEnvironment && chrome.storage) {
@@ -787,7 +819,7 @@ async function callGeminiDrawAPI(contents, apiType, expectJson = false, fallback
         
         const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:generateContent?key=${API_KEY}`;
         
-        // 请求配置 - 注意多模态特有的配置
+        // 请求配置 - 注意多模态特有的配置 responseModalities
         const requestBody = {
             contents: contents,
             generationConfig: {
@@ -795,8 +827,7 @@ async function callGeminiDrawAPI(contents, apiType, expectJson = false, fallback
                 topP: 0.95,
                 topK: 64,
                 maxOutputTokens: 8192,
-								responseModalities: ["TEXT"]
-                // responseModalities: ["IMAGE", "TEXT"] // 指定响应包含图像和文本
+                responseModalities: ["IMAGE", "TEXT"] // 指定响应包含图像和文本
             }
         };
         
@@ -1440,8 +1471,7 @@ function identifyKeyConcepts(llmKeyTerms) {
 // 2 解释概念
 function mockLLMExplain(text) {
     debugLog('调用模拟LLM接口解释: ' + text);
-    
-    // 预设的回答
+        // 预设的回答
     const presetResponses = {
         '模型解释性': {
             explanation: '模型解释性是指使深度学习模型的决策过程变得透明和可理解的能力。它涉及开发技术和方法，以揭示模型如何从输入数据得出特定预测或决策。模型解释性对于建立对AI系统的信任、确保公平性和支持模型调试至关重要。',
@@ -2055,6 +2085,101 @@ function mockChatResponse(message) {
     return `关于 “${message}” 的问题，我的理解是这与本页面的内容有关。(在实际应用中，这里将会调用真实API获取由LLM生成的详细回答。)`;
 }
 
+let selectedImages = []; // 用于存储待上传的图片, {id, data}
+
+// 处理图片上传
+function handleImageUpload(event) {
+    const files = event.target.files;
+    if (!files.length) {
+        return;
+    }
+
+    // 遍历所有选择的文件
+    Array.from(files).forEach(file => {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            // 为每个图片生成一个唯一ID
+            const imageId = 'img_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            selectedImages.push({ id: imageId, data: e.target.result });
+            // 添加后立即重新渲染所有预览
+            renderImagePreviews();
+        };
+        reader.readAsDataURL(file);
+    });
+
+    // 清空文件输入框，以便用户可以再次选择相同的文件
+    event.target.value = '';
+}
+
+// 移除选择的图片
+function removeSelectedImage(imageId) {
+    // 从数组中移除指定ID的图片
+    selectedImages = selectedImages.filter(img => img.id !== imageId);
+    // 重新渲染预览
+    renderImagePreviews();
+}
+
+// 渲染图片预览
+function renderImagePreviews() {
+    const previewContainer = document.getElementById('deepread-image-preview-container');
+    previewContainer.innerHTML = ''; // 清空现有预览
+
+    if (selectedImages.length === 0) {
+        previewContainer.style.display = 'none';
+        return;
+    }
+
+    previewContainer.style.display = 'flex'; // 使用flex布局来横向排列
+    previewContainer.style.flexWrap = 'nowrap'; // 防止换行
+    previewContainer.style.overflowX = 'auto'; // 内容超出时显示水平滚动条
+    previewContainer.style.padding = '5px';
+    previewContainer.style.marginBottom = '5px';
+
+    selectedImages.forEach(image => {
+        const previewWrapper = document.createElement('div');
+        previewWrapper.style.position = 'relative';
+        previewWrapper.style.width = '40px';
+        previewWrapper.style.height = '40px';
+        previewWrapper.style.borderRadius = '4px';
+        previewWrapper.style.border = '1px solid #ccc';
+        previewWrapper.style.overflow = 'hidden';
+        previewWrapper.style.marginRight = '5px'; // 图片间距
+        previewWrapper.style.flexShrink = '0'; // 防止缩放
+
+        const img = document.createElement('img');
+        img.src = image.data;
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.objectFit = 'cover';
+
+        const removeButton = document.createElement('button');
+        removeButton.textContent = '×';
+        removeButton.title = '移除图片';
+        removeButton.style.position = 'absolute';
+        removeButton.style.top = '0';
+        removeButton.style.right = '0';
+        removeButton.style.background = 'rgba(0,0,0,0.5)';
+        removeButton.style.color = 'white';
+        removeButton.style.border = 'none';
+        removeButton.style.borderRadius = '0 0 0 4px';
+        removeButton.style.width = '16px';
+        removeButton.style.height = '16px';
+        removeButton.style.lineHeight = '16px';
+        removeButton.style.textAlign = 'center';
+        removeButton.style.cursor = 'pointer';
+        removeButton.style.padding = '0';
+
+        removeButton.onclick = (e) => {
+            e.stopPropagation(); // 防止触发其他事件
+            removeSelectedImage(image.id);
+        };
+
+        previewWrapper.appendChild(img);
+        previewWrapper.appendChild(removeButton);
+        previewContainer.appendChild(previewWrapper);
+    });
+}
+
 // 聊天对话
 async function sendChatMessage() {
     const chatInput = document.getElementById('deepread-chat-input');
@@ -2069,8 +2194,8 @@ async function sendChatMessage() {
         return;
     }
     
-    // 添加用户消息到对话历史
-    addChatMessage(message, 'user');
+    // 添加用户消息到对话历史，包含图片
+    addChatMessage(message, 'user', false, true, selectedImages);
     
     // 清空输入框
     chatInput.value = '';
@@ -2090,11 +2215,16 @@ async function sendChatMessage() {
             removeChatMessage(loadingId);
         }
         
-        // 调用LLM API获取回答
-        // const response = mockChatResponse(message);
-        const llmCallResponse = await getChatResponse(message, chatHistory, pageContent);
-        const response = processChatResponse(llmCallResponse);
+        // 调用LLM API获取回答 // const response = mockChatResponse(message);
+        const responseText = await getChatResponse(message, chatHistory, pageContent, selectedImages);
+        const response = processChatResponse(responseText);
         addChatMessage(response, 'assistant');
+        
+        // 清空图片预览（如果发送了图片）
+        if (selectedImages.length > 0) {
+            selectedImages = []; // 清空数组
+            renderImagePreviews(); // 更新UI，移除所有预览
+        }
         addMemory(response, {
             type: 'message',
             role: 'assistant'
@@ -2112,7 +2242,8 @@ async function sendChatMessage() {
  * @param pageContent 页面内容摘要
  * @returns 聊天回答
  */
-async function getChatResponse(userMessage, chatHistory = [], pageContent = '') {
+async function getChatResponse(userMessage, chatHistory = [], pageContent = '', images = []) {
+    debugLog(`images: ${images && images.length > 0 ? images.length + '张图片' : '无图片'}`);
     debugLog('开始获取聊天回答，用户消息：' + userMessage);
     debugLog('聊天历史长度：' + chatHistory.length);
     
@@ -2123,7 +2254,7 @@ async function getChatResponse(userMessage, chatHistory = [], pageContent = '') 
     } catch (error) {
         console.error('搜索记忆时出错:', error);
     }
-    
+
     // 系统提示词
     let systemPrompt = `
         我是一个专业的深度阅读助手DeepRead，帮助用户进行网页浏览和理解。
@@ -2139,7 +2270,7 @@ async function getChatResponse(userMessage, chatHistory = [], pageContent = '') 
         ${pageContent}
         '''
     `;
-    
+
     // 如果有相关记忆，添加到系统提示词中
     if (relatedMemories && relatedMemories.length > 0) {
         systemPrompt += `
@@ -2150,7 +2281,7 @@ async function getChatResponse(userMessage, chatHistory = [], pageContent = '') 
         });
         systemPrompt += `'''`;
     }
-    
+
     // REST方式下，google不支持generationConfig里json属性，因此，系统提示词放在contents头条
     const contents = [
         {
@@ -2158,7 +2289,7 @@ async function getChatResponse(userMessage, chatHistory = [], pageContent = '') 
             parts: [{ text: systemPrompt }]
         }
     ];
-    
+
     // 聊天历史（已包含最新的即将发出的用户当前消息）
     let formattedHistory = [];
     if (chatHistory && chatHistory.length > 0) {
@@ -2167,14 +2298,6 @@ async function getChatResponse(userMessage, chatHistory = [], pageContent = '') 
             parts: [{ text: msg.message.substring(0, 1000) }]
         }));
     }
-    
-    // 添加历史消息到contents中
-    if (formattedHistory.length > 0) {
-        formattedHistory.forEach(msg => {
-            contents.push(msg);
-        });
-    }
-    
     // 统计contents所有文本的总字符数
     const totalChars = contents.reduce((sum, item) => {
         if (item.parts && item.parts[0] && typeof item.parts[0].text === 'string') {
@@ -2183,18 +2306,52 @@ async function getChatResponse(userMessage, chatHistory = [], pageContent = '') 
         return sum;
     }, 0);
     // 调用通用API函数
-    if (totalChars < 32768) {
-        debugLog('对话总字符数：' + totalChars + '，调用 Gemini Draw API 绘画聊天');
-        return await callGeminiDrawAPI(contents, '绘画聊天', false, chatResponseFallback);
+    // if (totalChars < 32768) {
+    //     debugLog('对话总字符数：' + totalChars + '，调用 Gemini Draw API 绘画聊天');
+    //     return await callGeminiDrawAPI(contents, '绘画聊天', false, chatResponseFallback);
+    // }
+    contents.push(...formattedHistory);
+
+    // 4. 构建包含图片和最新消息的用户输入 (userParts)
+    let userParts = [];
+    if (images && images.length > 0) {
+        images.forEach(image => {
+            // 从base64字符串中提取MIME类型和数据
+            const [header, data] = image.data.split(',');
+            const mimeType = header.match(/:(.*?);/)[1] || 'image/jpeg';
+            userParts.push({
+                inlineData: {
+                    mimeType: mimeType,
+                    data: data
+                }
+            });
+        });
+    }
+    // 无论有无图片，都添加文本消息
+    userParts.push({ text: userMessage });
+
+    // 5. 将新的用户消息（可能包含图片）替换掉历史记录中的最后一条纯文本消息
+    // 这是因为 sendChatMessage 已经将纯文本消息添加到了 history
+    contents[contents.length - 1] = { role: 'user', parts: userParts };
+
+    // debugLog("构建的最终请求内容:" + JSON.stringify(contents, null, 2));
+
+    // 6. 根据有无图片，智能选择并调用API
+    if (images && images.length > 0) {
+        // 有图片，调用多模态API
+        debugLog('对话总字符数：' + totalChars + "调用多模态API (callGeminiAPI)");
+        return await callGeminiAPI(contents, '多模态聊天', false, chatResponseFallback);
     } else {
-        debugLog('对话总字符数：' + totalChars + '，调用 Gemini API 文字聊天');
-        return await callGeminiAPI(contents, '对话聊天', false, chatResponseFallback);
+        // 没有图片，调用常规文本API
+        debugLog('对话总字符数：' + totalChars + "调用文本API (callGeminiAPI)");
+        return await callGeminiAPI(contents, '聊天', false, chatResponseFallback);
     }
 }
 
 // 处理LLM聊天对话响应
 function processChatResponse(llmResponse) {
     try {
+        // console.log('处理聊天响应:', llmResponse);
         // 检查是否是多模态响应（包含图像）
         if (typeof llmResponse === 'object' && llmResponse.text !== undefined && Array.isArray(llmResponse.images)) {
             // 处理文本部分
@@ -2243,11 +2400,8 @@ function processChatResponse(llmResponse) {
             return htmlContent;
         }
         
-        // 如果不是多模态响应，则使用原来的处理方式
-        // 如果是字符串直接使用，否则尝试转换为字符串
-        const responseText = typeof llmResponse === 'string' ? 
-            llmResponse : JSON.stringify(llmResponse);
-        
+        // 如果不是多模态响应，则使用原来的处理方式 如果是字符串直接使用，否则尝试转换为字符串
+        const responseText = typeof llmResponse === 'string' ?  llmResponse : JSON.stringify(llmResponse);
         // 使用Showdown库将Markdown转换为HTML
         if (typeof showdown !== 'undefined') {
             try {
@@ -2731,37 +2885,55 @@ function initChatEvents() {
 }
 
 // 添加聊天消息到对话历史
-function addChatMessage(message, role, isLoading = false, addToHistory = true) {
+function addChatMessage(message, role, isLoading = false, addToHistory = true, images = []) {
     const chatMessages = document.getElementById('deepread-chat-messages');
     if (!chatMessages) {
         console.log('未找到聊天消息容器');
         return null;
     }
-    
+    // console.log('添加聊天消息:', message);
     // 创建消息元素
     const messageElement = document.createElement('div');
     const messageId = generateUniqueId();
     messageElement.id = messageId;
     messageElement.className = `deepread-chat-message deepread-chat-message-${role}`;
-    
-    // 处理消息内容
-    let messageContent = '';
-    if (role === 'assistant') {
-        // 检测助手消息是否包含HTML标签
-        if (/<[a-z][\s\S]*>/i.test(message)) {
-            // 包含HTML标签，使用innerHTML
-            messageElement.innerHTML = message;
-            messageContent = message;
-        } else {
-            // 纯文本，使用textContent以防止特殊字符被解释为HTML
-            messageElement.textContent = message;
-            messageContent = message;
-        }
-    } else {
-        // 用户消息始终使用textContent以防止XSS攻击
-        messageElement.textContent = message;
-        messageContent = message;
+    messageElement.dataset.messageId = messageId;
+
+    // 如果消息包含图片，则渲染图片
+    if (images && images.length > 0) {
+        const imageContainer = document.createElement('div');
+        imageContainer.className = 'message-image-container';
+        images.forEach(image => {
+            const imgElement = document.createElement('img');
+            imgElement.src = image.data;
+            imgElement.alt = '图片';
+            imgElement.style.maxWidth = '100%'; // 保持图片响应式
+            imgElement.style.borderRadius = '8px';
+            imgElement.style.marginBottom = '8px';
+            imageContainer.appendChild(imgElement);
+        });
+        messageElement.appendChild(imageContainer);
     }
+
+    // 创建并添加文本内容
+    const textElement = document.createElement('div');
+    textElement.className = 'message-text-content';
+    
+    // 处理并追加文本内容
+    let messageContent = '';
+    // 只有在消息文本不为空时才创建和添加文本元素
+    if (message && message.trim() !== '') {
+        if (role === 'assistant' && /<[a-z][\s\S]*>/i.test(message)) {
+            // 助手消息且包含HTML，使用innerHTML
+            textElement.innerHTML = message;
+        } else {
+            // 用户消息或纯文本助手消息，使用textContent以防止XSS
+            textElement.textContent = message;
+        }
+        messageElement.appendChild(textElement);
+    }
+    // 保存原始消息内容，用于后续的操作按钮（如复制）
+    messageContent = message;
     
     // 如果不是加载状态消息（正在思考...），正常消息都会添加操作按钮
     if (!isLoading) {
@@ -3315,7 +3487,7 @@ function createSettingsPanel() {
     
     // 获取当前保存的API Key和MODEL
     let savedApiKey = '';
-    let savedModel = 'gemma-3-27b-it'; // 默认值
+    let savedModel = 'gemini-2.5-flash-lite-preview-06-17'; // 默认值
     
     // 使用Chrome存储API获取设置
     if (isExtensionEnvironment && chrome.storage) {
@@ -3464,13 +3636,13 @@ async function clearAllCache() {
 const clickCooldowns = {};
 
 /**
- * 防止重复点击的通用方法
- * @param {string} actionKey - 操作的唯一标识符
- * @param {Function} callback - 点击时要执行的回调函数
- * @param {number} cooldownMs - 冷却时间（毫秒）
- * @param {string} cooldownMessage - 冷却期间显示的提示消息
- * @returns {boolean} 是否执行了回调
- */
+* 防止重复点击的通用方法
+* @param {string} actionKey - 操作的唯一标识符
+* @param {Function} callback - 点击时要执行的回调函数
+* @param {number} cooldownMs - 冷却时间（毫秒）
+* @param {string} cooldownMessage - 冷却期间显示的提示消息
+* @returns {boolean} 是否执行了回调
+*/
 function preventDuplicateClick(actionKey, callback, cooldownMs = 5000, cooldownMessage = '正在发送请求，请勿重复点击。') {
     const now = Date.now();
     
@@ -3480,18 +3652,25 @@ function preventDuplicateClick(actionKey, callback, cooldownMs = 5000, cooldownM
         // 如果需要，可以在这里添加更明显的UI提示
         return false;
     }
-    
+
     // 设置冷却期结束时间
     clickCooldowns[actionKey] = now + cooldownMs;
-    
+
     // 执行回调
-    callback();
-    
+    try {
+        callback();
+    } catch (error) {
+        console.error(`执行 ${actionKey} 的回调时出错:`, error);
+        // 发生错误时，立即清除冷却，以便可以重试
+        delete clickCooldowns[actionKey];
+        return false;
+    }
+
     // 冷却期结束后清除
     setTimeout(() => {
         delete clickCooldowns[actionKey];
     }, cooldownMs);
-    
+
     return true;
 }
 
