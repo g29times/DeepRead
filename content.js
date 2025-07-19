@@ -2250,7 +2250,7 @@ async function getChatResponse(userMessage, chatHistory = [], pageContent = '', 
     // 先搜索相关记忆（如果MCP功能已启用）
     let relatedMemories = [];
     try {
-        relatedMemories = await searchMemories(userMessage);
+        relatedMemories = await searchMemories(userMessage, pageContent);
     } catch (error) {
         console.error('搜索记忆时出错:', error);
     }

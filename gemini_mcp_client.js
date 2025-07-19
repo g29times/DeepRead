@@ -141,7 +141,7 @@ async function saveChatHistoryToMCP(chatHistory, userId = "neo") {
  * @param {string} userId - 用户ID
  * @returns {Promise<Array>} - 返回相关记忆数组
  */
-async function searchMemories(query, userId = "neo") {
+async function searchMemories(query, pageContent, userId = "neo") {
     if (!enableMCP) {
         console.log('MCP功能已禁用，跳过记忆搜索');
         return [];
@@ -161,7 +161,7 @@ async function searchMemories(query, userId = "neo") {
                     role: "user",
                     content: query
                 }],
-                pageContent: "",
+                pageContent: pageContent,
                 mcpAction: "search_mem",
                 mcpData: {
                     query: query,
