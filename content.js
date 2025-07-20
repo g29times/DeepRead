@@ -257,9 +257,10 @@ function createDeepReadPanel() {
     resizeHandle.className = 'deepread-resize-handle';
     container.appendChild(resizeHandle);
     
-    // 添加拖动事件处理
+    // 添加水平拖动事件处理
     initResizeHandlers(container, resizeHandle);
-    
+    // 垂直拖动功能将在showAnalysisResults函数中初始化，确保DOM元素已创建
+
     // 创建面板
     const panel = document.createElement('div');
     panel.id = 'deepread-panel';
@@ -393,7 +394,7 @@ function createDeepReadPanel() {
     document.body.appendChild(container);
 
     // 添加事件监听
-    document.getElementById('deepread-analyze-btn').addEventListener('click', analyzeFullContent);
+    document.getElementById('deepread-analyze-btn').addEventListener('click', analyzePageContent);
 
     // 创建导航指示器
     const navIndicator = document.createElement('div');
@@ -487,6 +488,127 @@ function initResizeHandlers(container, resizeHandle) {
             document.body.style.userSelect = '';
         }
     });
+}
+
+// 初始化垂直拖动功能 showAnalysisResults -> initVerticalResizeHandlers
+function initVerticalResizeHandlers() {
+    console.log('初始化垂直拖动功能');
+    // 使用document.querySelector而非container.querySelector来确保能找到元素
+    const explanationSection = document.querySelector('#deepread-explanation-section-id');
+    const verticalResizer = document.querySelector('#deepread-vertical-resizer');
+    const chatSection = document.querySelector('.deepread-chat-section');
+    const contentArea = document.querySelector('#deepread-content');
+
+    if (!explanationSection || !verticalResizer || !chatSection || !contentArea) {
+        console.log('DeepRead: 垂直拖动组件未找到，跳过初始化。', {
+            explanationSection: explanationSection ? explanationSection.id : null,
+            verticalResizer: verticalResizer ? verticalResizer.id : null,
+            chatSection: chatSection ? chatSection.className : null,
+            contentArea: contentArea ? contentArea.id : null
+        });
+        return;
+    }
+    
+    // 设置初始高度，确保有一个默认值
+    if (!explanationSection.style.height) {
+        explanationSection.style.height = '300px';
+    }
+
+    console.log('DeepRead: 初始化垂直拖动功能');
+    
+    // 先移除可能存在的旧事件监听器
+    const newResizer = verticalResizer.cloneNode(true);
+    verticalResizer.parentNode.replaceChild(newResizer, verticalResizer);
+    // 重新获取引用
+    const updatedResizer = document.querySelector('#deepread-vertical-resizer');
+    // 使用updatedResizer代替verticalResizer
+    
+    // 使用全局变量跟踪拖动状态
+    window.isVerticalResizing = false;
+    
+    // 设置拖动条的样式，增强可见性
+    updatedResizer.style.cursor = 'ns-resize';
+    updatedResizer.style.backgroundColor = '#e0e0e0';
+    updatedResizer.style.height = '5px'; // 增加高度便于拖动
+    updatedResizer.title = '上下拖动调整面板高度';
+    
+    // 定义拖动开始函数
+    function handleMouseDown(e) {
+        // 阻止默认行为和事件冒泡
+        e.preventDefault();
+        e.stopPropagation();
+        
+        window.isVerticalResizing = true;
+        const startY = e.clientY;
+        const startHeight = explanationSection.offsetHeight;
+        
+        console.log('开始垂直拖动，初始高度:', startHeight);
+        updatedResizer.classList.add('active');
+        updatedResizer.style.backgroundColor = '#a0a0a0'; // 拖动时变色
+        
+        // 更改鼠标样式和禁用文本选择
+        document.body.style.cursor = 'ns-resize';
+        document.body.style.userSelect = 'none';
+        
+        // 直接在document上添加事件监听器
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+        
+        function handleMouseMove(e) {
+            if (!window.isVerticalResizing) return;
+            
+            const dy = e.clientY - startY;
+            const newHeight = startHeight + dy;
+            
+            // 使用固定的最小高度值
+            const minHeight = 200;
+            const chatMinHeight = 150;
+            const containerHeight = contentArea.offsetHeight;
+            const resizerHeight = updatedResizer.offsetHeight || 8;
+            
+            // 调试输出
+            // console.log('拖动中:', {
+            //     dy,
+            //     newHeight,
+            //     containerHeight,
+            //     available: containerHeight - resizerHeight
+            // });
+            
+            // 确保调整后的高度在有效范围内
+            if (newHeight >= minHeight && (containerHeight - newHeight - resizerHeight) >= chatMinHeight) {
+                // 直接设置像素值，而不是使用calc
+                explanationSection.style.height = newHeight + 'px';
+                explanationSection.style.minHeight = newHeight + 'px';
+                explanationSection.style.maxHeight = newHeight + 'px';
+                
+                // 计算聊天区域高度
+                const chatHeight = containerHeight - newHeight - resizerHeight;
+                chatSection.style.height = chatHeight + 'px';
+                chatSection.style.minHeight = chatHeight + 'px';
+            }
+            
+            // 阻止事件冒泡和默认行为
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        
+        function handleMouseUp(e) {
+            window.isVerticalResizing = false;
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+            
+            // 恢复鼠标样式和文本选择
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            updatedResizer.classList.remove('active');
+            updatedResizer.style.backgroundColor = '#e0e0e0'; // 恢复原色
+            
+            console.log('结束垂直拖动，最终高度:', explanationSection.offsetHeight);
+        }
+    }
+    
+    // 添加事件监听器
+    updatedResizer.addEventListener('mousedown', handleMouseDown);
 }
 
 /**
@@ -740,7 +862,7 @@ function parseGeminiResponse(responseData, apiType, expectJson = false, fallback
             debugLog(`${apiType} Google Gemini API 收到的原始响应文本: ${responseText}`);
             
             // 检查是否包含groundingMetadata（搜索结果）
-            if (candidate.groundingMetadata) {
+            if (candidate.groundingMetadata && apiType.indexOf('聊天') !== -1) {
                 debugLog(`${apiType} 检测到groundingMetadata，处理搜索结果引用`);
                 
                 // 处理搜索结果
@@ -813,8 +935,9 @@ function parseGeminiResponse(responseData, apiType, expectJson = false, fallback
                     // 直接返回处理后的文本
                     return processedResponse;
                 }
-            } else {
-                // 没有groundingMetadata，按原来的方式处理
+            } 
+            // 没有groundingMetadata，按原来的方式处理
+            else {
                 if (expectJson) {
                     try {
                         // 尝试解析JSON响应，只有当响应是字符串时才需要解析
@@ -1257,8 +1380,8 @@ async function callGeminiDrawAPI(contents, apiType, expectJson = false, fallback
     }
 }
     
-// 1 全文分析 - 附加文本编辑和确认流程
-function analyzeFullContent() {
+// 1 全文分析 - 支持人工编辑和确认
+function analyzePageContent() {
     debugLog('准备分析全文内容');
     
     // 检查页面是否已经分析过
@@ -1272,9 +1395,6 @@ function analyzeFullContent() {
     
     // 如果没有分析过 开始提取页面内容
     pageContent = extractPageContent();
-    
-    // 显示文本编辑区域
-    showTextEditor(pageContent);
 
 }
 
@@ -1291,8 +1411,6 @@ function extractPageContent() {
     // 获取所有段落，但排除UI元素中的段落
     const paragraphs = [];
     let processedElements = new Set(); // 用于跟踪已处理过的元素，避免重复
-    // 为每个段落添加ID
-    let idCounter = 0;
     
     // 处理每个内容区域
     contentAreas.forEach(contentArea => {
@@ -1380,10 +1498,14 @@ function extractPageContent() {
     }
     
     debugLog('第一步：---> 提取页面内容长度: ' + content.length);
+    
+    // 第二步：显示文本编辑区域
+    showTextEditor(content);
+
     return content;
 }
 
-// b 全文分析 显示文本编辑区域（待确认）
+// b 全文分析 显示文本编辑区域（待人工确认）
 function showTextEditor(content) {
     debugLog('第二步：显示文本编辑区域 待确认分析内容');
     
@@ -1406,9 +1528,9 @@ function showTextEditor(content) {
                 <h3>页面内容预览</h3>
                 <span>您可以编辑以下内容，然后点击“确认分析”按钮开始分析。</span>
                 <div class="deepread-editor-controls">
-                    <button id="deepread-analyze-btn">确认分析</button>
-                    <button id="deepread-reanalyze-btn" title="重新提取页面内容">重新提取</button>
-                    <button id="deepread-cancel-btn">取消</button>
+                    <button id="deepread-analyze-btn" class="deepread-btn">确认分析</button>
+                    <button id="deepread-reanalyze-btn" class="deepread-btn" title="重新提取页面内容">重新提取</button>
+                    <button id="deepread-cancel-btn" class="deepread-btn">取消</button>
                 </div>
                 <textarea class="deepread-text-editor" id="deepread-text-input">${content}</textarea>
             </div>
@@ -1452,7 +1574,7 @@ function showTextEditor(content) {
     }
 }
 
-// c 全文分析 调用LLM API（已确认）
+// c 全文分析 调用LLM API（人工已确认）
 async function analyzeContent(content) {
     debugLog('第三步：确认分析字数：' + content.length + '，预览: ' + content.substring(0, 100) + '...');
     
@@ -1463,13 +1585,13 @@ async function analyzeContent(content) {
     }
     try {
         // 调用LLM API获取分析结果
-        const llmResponse = await getFullContentAnalyze(content);
+        const llmResponse = await callAnalyzeContent(content);
         // 如果调用失败，使用预设数据
         if (!llmResponse || llmResponse.summary == pageSummaryFallback) {
             console.error('获取分析结果失败');
             return;
         }
-        // 存储关键术语以供后续使用
+        // 存储关键术语，并更新页面内容
         if (llmResponse && llmResponse.keyTerms) {
             window.keyTerms = llmResponse.keyTerms;
             pageContent = content;
@@ -1498,6 +1620,8 @@ async function analyzeContent(content) {
             pageAnalyzed = true;
             // 为段落添加ID
             addParagraphIds()
+        } else {
+            deepreadContent.innerHTML = '<div class="deepread-error">抱歉，分析内容时出错。</div>';
         }
     } catch (error) {
         console.error('分析内容时出错:', error);
@@ -1589,11 +1713,11 @@ async function addParagraphIds() {
 }
 
 /**
- * Google API 获取全文理解
+ * 调用API进行全文理解 analyzeContent -> callAnalyzeContent
  * @param {string} content 页面内容
  * @returns {Promise<Object>} 分析结果，包含摘要和关键术语
  */
-async function getFullContentAnalyze(content) {
+async function callAnalyzeContent(content) {
     debugLog('开始分析全文内容，长度：' + content.length);
     
     // 系统提示词
@@ -1647,7 +1771,7 @@ async function getFullContentAnalyze(content) {
     return await callGeminiAPI(contents, '全文分析', true, fallbackResponse);
 }
     
-// analyzeFullContent|analyzeContent -> 显示LLM全文分析结果
+// 显示LLM全文分析结果 analyzeContent -> showAnalysisResults
 function showAnalysisResults(analysisResult) {
     // debugLog('全文分析结果:', analysisResult);
     
@@ -1679,7 +1803,7 @@ function showAnalysisResults(analysisResult) {
         if (analysisResult?.keyTerms && analysisResult.keyTerms.length > 0) {
             keyTermsHtml = `
                 <div class="deepread-key-terms">
-                    <h4>关键术语</h4>
+                    <h4>相关概念</h4>
                     <ul>
                         ${analysisResult.keyTerms.map(term => 
                             `<li><a href="#" class="deepread-concept" data-concept="${term}">${term}</a></li>`
@@ -1739,6 +1863,7 @@ function showAnalysisResults(analysisResult) {
                 <p>请浏览文章，选择任意文本并点击出现的DR按钮，我将提供更深入的解读和相关段落导航。</p>
                 <div id="deepread-concept-explanation-info"></div>
             </div>
+            <div class="deepread-vertical-resizer" id="deepread-vertical-resizer"></div>
             <div class="deepread-chat-section">
                 <div class="deepread-section-header">
                     <h3>对话区</h3>
@@ -1766,7 +1891,8 @@ function showAnalysisResults(analysisResult) {
         // 初始化概念区相关的事件监听
         initConceptEvents();
         
-        // 注意：重新分析按钮已移至文本编辑区域
+        // 初始化垂直拖动功能
+        initVerticalResizeHandlers();
         
         // 开始处理页面内容，识别关键概念
         identifyKeyConcepts(analysisResult?.keyTerms);
@@ -1778,27 +1904,23 @@ function showAnalysisResults(analysisResult) {
 function identifyKeyConcepts(llmKeyTerms) {
     // 使用LLM返回的关键术语，如果没有则使用预设值
     const keyTerms = llmKeyTerms || [
-        '模型解释性', '深度学习', '黑盒', '决策透明度', '特征重要性',
-        '注意力机制', '局部解释', '模型诊断', '人机协作'
+        '深度学习', '黑盒', '人机协作'
     ];
 
     // 查找页面中的段落
     const paragraphs = document.querySelectorAll('p');
-    
-    // 为每个段落添加ID（如果没有）
-    // paragraphs.forEach((p, index) => {
-    //     if (!p.id) {
-    //         p.id = `paragraph-${index}`;
-    //     }
-    // });
 
     // 遍历段落，查找关键术语
     paragraphs.forEach(p => {
         keyTerms.forEach(term => {
             // 简单的文本替换，实际应用中需要更复杂的NLP
-            const regex = new RegExp(`\\b${term}\\b`, 'g');
-            p.innerHTML = p.innerHTML.replace(regex, 
-                `<span class="deepread-concept" data-concept="${term}">${term}</span>`);
+            try {
+                const regex = new RegExp(`\\b${term}\\b`, 'g');
+                p.innerHTML = p.innerHTML.replace(regex, 
+                    `<span class="deepread-concept" data-concept="${term}">${term}</span>`);
+            } catch (error) {
+                console.error(`identifyKeyConcepts: replace ${term} failed`, error);
+            }
         });
     });
 
@@ -1953,7 +2075,7 @@ async function explainConcept(conceptName, element) {
             } else {
                 // 如果不存在，调用LLM API获取概念解释
                 debugLog(`概念"${displayName}"不在缓存中，调用LLM获取解释`);
-                const conceptInfo = await getConceptExplanation(conceptName, pageContent);
+                const conceptInfo = await callExplanationConcept(conceptName, pageContent);
                 // 如果调用失败，显示错误
                 if (!conceptInfo) {
                     console.error('获取概念解释失败:', conceptName);
@@ -2030,7 +2152,7 @@ async function explainConcept(conceptName, element) {
  * @param {string} pageContent 页面内容
  * @returns {Promise<Object>} 概念解释，包含解释文本、相关概念和相关段落
  */
-async function getConceptExplanation(conceptName, pageContent = '') {
+async function callExplanationConcept(conceptName, pageContent = '') {
     // 系统提示词
     const systemPrompt = `
         我是一个专业的深度阅读助手DeepRead，帮助用户进行网页浏览和理解。
@@ -2226,9 +2348,8 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
         relatedParagraphsHtml += '</div>';
     }
     
-    // 更新解释区内容，保留对话区
+    // 更新解释区内容，如果已经有对话区，只更新解释部分
     if (chatSection) {
-        // 如果已经有对话区，只更新解释部分
         const explanationDiv = content.querySelector('.deepread-explanation-section');
         if (explanationDiv) {
             // 创建概念导航按钮
@@ -2255,8 +2376,9 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
                 ${relatedConceptsHtml}
                 ${relatedParagraphsHtml}
             `;
-        } else {
-            // 如果没有解释区，在对话区前插入
+        } 
+        // 如果没有解释区，在对话区前插入
+        else {
             const explanationSection = document.createElement('div');
             explanationSection.className = 'deepread-explanation-section';
             explanationSection.innerHTML = `
@@ -2267,8 +2389,9 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
             `;
             content.insertBefore(explanationSection, chatSection);
         }
-    } else {
-        // 如果没有对话区，创建完整的内容
+    } 
+    // 如果没有对话区，创建解释区+对话区
+    else {
         content.innerHTML = `
             <div class="deepread-explanation-section">
                 <h3 data-concept-key="${conceptKey}">${displayName}</h3>
@@ -2276,6 +2399,7 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
                 ${relatedConceptsHtml}
                 ${relatedParagraphsHtml}
             </div>
+            <div class="deepread-vertical-resizer" id="deepread-vertical-resizer"></div>
             <div class="deepread-chat-section">
                 <div class="deepread-section-header">
                     <h3>对话区</h3>
@@ -3966,7 +4090,7 @@ async function clearAllCache() {
                     // 重新绑定全文分析按钮的点击事件
                     const analyzeBtn = document.getElementById('deepread-analyze-btn');
                     if (analyzeBtn) {
-                        analyzeBtn.addEventListener('click', analyzeFullContent);
+                        analyzeBtn.addEventListener('click', analyzePageContent);
                     }
                 }
                 
