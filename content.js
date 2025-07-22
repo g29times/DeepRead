@@ -16,8 +16,12 @@ console.log('DeepRead content script loaded!');
 
 // 检测是否在Chrome扩展环境中
 const isExtensionEnvironment = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id;
-const pageSummaryFallback = '无法分析页面内容。';
-const conceptExplanationFallback = '的解释暂时无法获取。';
+
+// 'gemini-2.0-flash-preview-image-generation';
+const MODEL_ID = 'gemini-2.5-flash-lite-preview-06-17'
+const greetingMessage = '您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。';
+const pageSummaryFallback = '抱歉，我暂时无法分析页面内容。请稍后再试。';
+const conceptExplanationFallback = '的解释暂时无法获取。请稍后再试。';
 const chatResponseFallback = '关于您的问题，我暂时无法回答。请稍后再试。';
 const imageGenerationFallback = '生成图像失败，请稍后再试。';
 
@@ -240,7 +244,7 @@ if (isExtensionEnvironment) {
     });
 }
 
-// 页面加载时 创建DeepRead面板
+// 页面加载时 创建DeepRead面板（核心代码）
 function createDeepReadPanel() {
     // 检查是否已存在面板
     if (document.getElementById('deepread-panel')) {
@@ -561,7 +565,7 @@ function initVerticalResizeHandlers() {
             const newHeight = startHeight + dy;
             
             // 使用固定的最小高度值
-            const minHeight = 200;
+            const minHeight = 100;
             const chatMinHeight = 150;
             const containerHeight = contentArea.offsetHeight;
             const resizerHeight = updatedResizer.offsetHeight || 8;
@@ -612,12 +616,13 @@ function initVerticalResizeHandlers() {
 }
 
 /**
- * 查找页面中的内容区域
+ * 查找页面中的内容区域（核心代码）
  * @returns {Array} 内容区域元素数组
  */
 function findContentAreas() {
     // 尝试查找所有可能的内容区域
     const contentSelectors = [
+        '.cmsContent', '.article-content', '.post-body', // 特定CMS容器
         'article', '.article', 'd-article', '.post', '.content', 'main', 
         '#content', '#main', '.main-content', '.post-content',
         '[role="main"]', '[itemprop="articleBody"]'
@@ -749,9 +754,6 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
             throw new Error('未设置 API Key，请在设置面板中设置您的 Google Gemini API Key');
         }
         
-        // 使用用户配置的MODEL，如果没有则使用默认值
-        let MODEL_ID = 'gemini-2.5-flash-lite-preview-06-17'; // 默认值
-        
         // 尝试从存储中获取用户配置的MODEL
         if (isExtensionEnvironment && chrome.storage) {
             try {
@@ -783,9 +785,12 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
                 maxOutputTokens: 8192
             },
             tools: [
-              {
-                googleSearch: {}
-              },
+                {
+                    urlContext: {}
+                },
+                {
+                    googleSearch: {}
+                },
             ],
         };
         
@@ -844,6 +849,289 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
 }
 
 /**
+ * 流式调用Google Gemini API函数
+ * @param {Array} contents 请求内容，包含系统提示词和用户消息
+ * @param {string} apiType 调用类型，用于日志记录和错误处理
+ * @param {Function} onChunk 每收到一个数据块时的回调函数
+ * @param {Function} onComplete 所有数据接收完成时的回调函数
+ * @param {Function} onError 发生错误时的回调函数
+ * @returns {Promise<void>} 无返回值，通过回调函数处理结果
+ */
+async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onError) {
+    try {
+        // 获取用户设置的API Key
+        let API_KEY = null;
+        // 如果是在扩展环境中，使用Chrome存储API
+        if (isExtensionEnvironment && chrome.storage) {
+            // 由于 chrome.storage.sync.get 是异步的，我们需要将其转换为 Promise
+            API_KEY = await new Promise(resolve => {
+                chrome.storage.sync.get(['deepread_api_key'], function(result) {
+                    resolve(result.deepread_api_key || null);
+                });
+            });
+        } else {
+            // 如果不是在扩展环境中，使用localStorage
+            API_KEY = localStorage.getItem('deepread_api_key');
+        }
+        // 检查API Key是否有效
+        if (!API_KEY) {
+            const errorMsg = '未设置 API Key，请在设置面板中设置您的 Google Gemini API Key';
+            alert('请先在设置面板中设置您的 API Key，然后刷新页面！');
+            if (onError) onError(new Error(errorMsg));
+            return;
+        }
+        
+        // 尝试从存储中获取用户配置的MODEL
+        if (isExtensionEnvironment && chrome.storage) {
+            try {
+                // 同步获取存储的MODEL
+                const result = await new Promise(resolve => {
+                    chrome.storage.sync.get(['deepread_model'], resolve);
+                });
+                
+                if (result.deepread_model && result.deepread_model.trim() !== '') {
+                    MODEL_ID = result.deepread_model.trim();
+                    debugLog(`使用用户配置的MODEL: ${MODEL_ID}`);
+                }
+            } catch (error) {
+                console.error('获取用户配置的MODEL失败:', error);
+                // 出错时使用默认MODEL
+            }
+        }
+        
+        // 使用streamGenerateContent API
+        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:streamGenerateContent?key=${API_KEY}`;
+        
+        // 请求配置
+        const requestBody = {
+            contents: contents,
+            generationConfig: {
+                responseMimeType: 'text/plain',
+                temperature: 0.7,
+                topP: 0.95,
+                topK: 64,
+                maxOutputTokens: 8192
+            },
+            tools: [
+                {
+                    urlContext: {}
+                },
+                {
+                    googleSearch: {}
+                },
+            ],
+        };
+        
+        debugLog(`发送流式 ${apiType} 请求到 Google Gemini API \n ${API_URL}`);
+        
+        // 创建AbortController来设置超时
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 300000); // 300秒超时
+        
+        // 发送请求
+        let response;
+        try {
+            response = await fetch(API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestBody),
+                signal: controller.signal // 使用AbortController的signal
+            });
+            
+            // 请求完成后清除超时定时器
+            clearTimeout(timeoutId);
+        } catch (fetchError) {
+            // 清除超时定时器
+            clearTimeout(timeoutId);
+            
+            // 如果是超时错误
+            if (fetchError.name === 'AbortError') {
+                console.error(`${apiType} 流式API请求超时（300秒）`);
+                if (onError) onError(new Error(`API请求超时，请检查网络连接或稍后再试`));
+                return;
+            }
+            
+            // 其他网络错误
+            console.error(`${apiType} 流式API请求错误：`, fetchError);
+            if (onError) onError(fetchError);
+            return;
+        }
+        
+        // 检查响应状态
+        if (!response.ok) {
+            const errorData = await response.json();
+            console.error(`${apiType} 流式API请求失败：`, errorData);
+            if (onError) onError(new Error(`API请求失败: ${response.status} ${response.statusText}`));
+            return;
+        }
+        
+        // 处理流式响应
+        try {
+            // 读取响应流
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let completeResponse = '';
+            let streamGroundingMetadata = null; // 在流式处理中收集groundingMetadata
+            
+            // 处理流式数据
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                
+                // 解码二进制数据为文本
+                const chunk = decoder.decode(value, { stream: true });
+                buffer += chunk;
+                
+                // 尝试解析JSON数据块
+                // 注意：流式响应可能会分多次返回，需要处理不完整的JSON
+                try {
+                    // 检查是否有完整的JSON对象
+                    let startPos = 0;
+                    while (startPos < buffer.length) {
+                        // 查找JSON对象的开始和结束
+                        const jsonStart = buffer.indexOf('{', startPos);
+                        if (jsonStart === -1) break;
+                        
+                        let jsonEnd = -1;
+                        let braceCount = 0;
+                        let inString = false;
+                        let escapeNext = false;
+                        
+                        // 查找匹配的右括号
+                        for (let i = jsonStart; i < buffer.length; i++) {
+                            const char = buffer[i];
+                            
+                            if (escapeNext) {
+                                escapeNext = false;
+                                continue;
+                            }
+                            
+                            if (char === '\\') {
+                                escapeNext = true;
+                                continue;
+                            }
+                            
+                            if (char === '"') {
+                                inString = !inString;
+                                continue;
+                            }
+                            
+                            if (!inString) {
+                                if (char === '{') {
+                                    braceCount++;
+                                } else if (char === '}') {
+                                    braceCount--;
+                                    if (braceCount === 0) {
+                                        jsonEnd = i + 1;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // 如果找到了完整的JSON对象
+                        if (jsonEnd !== -1) {
+                            const jsonStr = buffer.substring(jsonStart, jsonEnd);
+                            try {
+                                const jsonObj = JSON.parse(jsonStr);
+                                
+                                // 处理响应块
+                                if (jsonObj.candidates && jsonObj.candidates[0] && 
+                                    jsonObj.candidates[0].content && jsonObj.candidates[0].content.parts) {
+                                    
+                                    const candidate = jsonObj.candidates[0];
+                                    const responseText = candidate.content.parts[0].text || '';
+                                    
+                                    // 累积完整响应
+                                    completeResponse += responseText;
+                                    
+                                    // 收集groundingMetadata（核心代码）
+                                    if (candidate.groundingMetadata && 
+                                        Object.keys(candidate.groundingMetadata).length > 0) {
+                                        streamGroundingMetadata = candidate.groundingMetadata;
+                                        debugLog(`${apiType} 流式响应中收集到groundingMetadata，包含: ${Object.keys(candidate.groundingMetadata).join(', ')}`);
+                                    }
+                                    
+                                    // 始终调用回调函数处理当前块，无论是否有groundingMetadata
+                                    // console.log('callStream', responseText)
+                                    if (onChunk) onChunk(responseText);
+                                }
+                                
+                                // 移除已处理的JSON
+                                buffer = buffer.substring(jsonEnd);
+                                startPos = 0;
+                            } catch (jsonError) {
+                                // JSON解析错误，可能是不完整的JSON，继续等待更多数据
+                                startPos = jsonStart + 1;
+                            }
+                        } else {
+                            // 没有找到完整的JSON对象，等待更多数据
+                            break;
+                        }
+                    }
+                } catch (parseError) {
+                    console.error(`${apiType} 解析流式响应时出错:`, parseError);
+                    // 继续处理，不中断流
+                }
+            }
+            
+            // 所有数据接收完成后，处理完整响应
+            debugLog(`${apiType} 流式响应接收完成，总长度: ${completeResponse.length}`);
+            
+            // 尝试从buffer中解析最后一个完整的JSON对象，它可能包含groundingMetadata
+            try {
+                if (buffer.trim()) {
+                    const lastJsonStart = buffer.lastIndexOf('{');
+                    if (lastJsonStart !== -1) {
+                        const lastJsonStr = buffer.substring(lastJsonStart);
+                        const lastJsonObj = JSON.parse(lastJsonStr);
+                        if (lastJsonObj.candidates && lastJsonObj.candidates[0]) {
+                            lastCandidate = lastJsonObj.candidates[0];
+                            debugLog(`${apiType} 成功解析最后一个响应块，可能包含groundingMetadata`);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error(`${apiType} 解析最后一个响应块时出错:`, error);
+                // 继续处理，不中断流程
+            }
+            
+            // 构造完整响应对象
+            const fullResponseData = {
+                candidates: [{
+                    content: {
+                        parts: [{
+                            text: completeResponse
+                        }]
+                    },
+                    // 只有当groundingMetadata存在且不为空对象时才添加
+                    ...(streamGroundingMetadata && Object.keys(streamGroundingMetadata).length > 0 ? 
+                        { groundingMetadata: streamGroundingMetadata } : {})
+                }]
+            };
+            
+            // 使用parseGeminiResponse处理完整响应，这里会处理groundingMetadata
+            const processedResponse = parseGeminiResponse(fullResponseData, apiType, false);
+            
+            debugLog(`${apiType} 流式响应处理完成，最终响应长度: ${processedResponse.length}`);
+            
+            // 调用完成回调，传递处理后的响应
+            if (onComplete) onComplete(processedResponse);
+            
+        } catch (streamError) {
+            console.error(`${apiType} 处理流式响应时出错:`, streamError);
+            if (onError) onError(streamError);
+        }
+    } catch (error) {
+        console.error(`${apiType} 流式调用出错:`, error);
+        if (onError) onError(error);
+    }
+}
+
+/**
  * 解析Gemini API的响应，处理带有groundingMetadata的搜索结果
  * @param {Object} responseData API返回的原始响应数据
  * @param {string} apiType 调用类型，用于日志记录和错误处理
@@ -860,8 +1148,13 @@ function parseGeminiResponse(responseData, apiType, expectJson = false, fallback
             const candidate = responseData.candidates[0];
             const responseText = candidate.content.parts[0].text;
             debugLog(`${apiType} Google Gemini API 收到的原始响应文本: ${responseText}`);
-            
-            // 检查是否包含groundingMetadata（搜索结果）
+            // 在第1152行后添加：
+            debugLog(`${apiType} 检查groundingMetadata条件:`);
+            debugLog(`  candidate.groundingMetadata存在: ${!!candidate.groundingMetadata}`);
+            if (candidate.groundingMetadata) {
+                debugLog(`  groundingMetadata keys: ${Object.keys(candidate.groundingMetadata).join(', ')}`);
+            }
+            // 检查是否包含groundingMetadata（使用搜索tool后返回）
             if (candidate.groundingMetadata && apiType.indexOf('聊天') !== -1) {
                 debugLog(`${apiType} 检测到groundingMetadata，处理搜索结果引用`);
                 
@@ -938,6 +1231,7 @@ function parseGeminiResponse(responseData, apiType, expectJson = false, fallback
             } 
             // 没有groundingMetadata，按原来的方式处理
             else {
+                debugLog(`${apiType} 没有groundingMetadata，按原来的方式处理`);
                 if (expectJson) {
                     try {
                         // 尝试解析JSON响应，只有当响应是字符串时才需要解析
@@ -1010,7 +1304,7 @@ function parseGeminiResponse(responseData, apiType, expectJson = false, fallback
         }
     } catch (error) {
         console.error(`${apiType} 解析响应时出错:`, error);
-        return expectJson ? fallbackResponse : (typeof fallbackResponse === 'string' ? fallbackResponse : '处理响应时出错');
+        return expectJson ? fallbackResponse : (typeof fallbackResponse === 'string' ? fallbackResponse : '解析响应时出错');
     }
 }
 
@@ -1022,206 +1316,198 @@ function parseGeminiResponse(responseData, apiType, expectJson = false, fallback
  */
 function processGroundingMetadata(responseText, groundingMetadata) {
     try {
-        // 如果没有groundingMetadata或者groundingSupports，直接返回原文
-        if (!groundingMetadata || !groundingMetadata.groundingSupports || !groundingMetadata.groundingChunks) {
+        debugLog('processGroundingMetadata 处理groundingMetadata');
+        // debugLog('处理groundingMetadata，数据结构:', JSON.stringify(groundingMetadata, null, 2));
+        
+        if (!groundingMetadata) {
+            debugLog('没有groundingMetadata，返回原文');
             return responseText;
         }
         
-        debugLog('处理groundingMetadata，添加引用标记和Sources区块');
-        debugLog('groundingSupports 数量:', groundingMetadata.groundingSupports.length);
-        debugLog('groundingChunks 数量:', groundingMetadata.groundingChunks.length);
-        
-        // 首先收集所有唯一的引用源
-        const sources = [];
-        const sourceMap = new Map(); // 用于去重
-        
-        // 遍历所有groundingChunks，收集唯一的源
-        groundingMetadata.groundingChunks.forEach((chunk, index) => {
-            if (chunk && chunk.web) {
-                const { uri, title } = chunk.web;
-                if (!sourceMap.has(uri)) {
-                    sourceMap.set(uri, sources.length + 1); // 索引从1开始
-                    sources.push({ uri, title });
-                    debugLog(`添加源 ${sources.length}: ${title || uri}`);
-                }
-            }
-        });
-        
-        // 创建一个副本，避免修改原始文本
         let processedText = responseText;
-        debugLog('原始文本长度:', responseText.length);
+        let sources = [];
+        let hasDetailedSupports = false;
         
-        // 按照endIndex从大到小排序，这样我们可以从后向前插入引用标记，避免位置偏移
-        const sortedSupports = [...groundingMetadata.groundingSupports].sort((a, b) => 
-            b.segment.endIndex - a.segment.endIndex
-        );
-        
-        debugLog('按endIndex排序后的supports:');
-        sortedSupports.forEach((support, index) => {
-            if (support.segment) {
-                debugLog(`Support ${index}: startIndex=${support.segment.startIndex}, endIndex=${support.segment.endIndex}`);
-                debugLog(`  段落文本: "${support.segment.text ? support.segment.text.substring(0, 100) : 'undefined'}..."`);
-                debugLog(`  引用索引: [${support.groundingChunkIndices.join(', ')}]`);
-            } else {
-                debugLog(`Support ${index}: 没有segment`);
-            }
-        });
-        
-        // 创建一个映射来跟踪每个segment的处理状态
-        const segmentProcessed = new Set();
-        
-        // 遍历每个支持段落，从后向前添加引用标记
-        for (let i = 0; i < sortedSupports.length; i++) {
-            const support = sortedSupports[i];
-            const { segment, groundingChunkIndices } = support;
+        // 第一步：从 searchEntryPoint 提取基本的搜索链接
+        if (groundingMetadata.searchEntryPoint && groundingMetadata.webSearchQueries) {
+            debugLog('检测到searchEntryPoint，提取搜索链接');
             
-            if (!segment || !segment.text) {
-                debugLog(`Support ${i}: 没有segment或segment.text，跳过`);
-                continue;
-            }
+            const renderedContent = groundingMetadata.searchEntryPoint.renderedContent;
+            const linkMatches = renderedContent.match(/href="([^"]+)"/g);
             
-            const expectedText = segment.text;
-            // 使用更精确的segmentKey，包含位置信息避免误判
-            const segmentKey = `${segment.startIndex || 0}_${segment.endIndex}_${expectedText.substring(0, 50)}`;
-            
-            // 避免重复处理相同的segment
-            if (segmentProcessed.has(segmentKey)) {
-                debugLog(`Support ${i}: segment已处理过，跳过`);
-                continue;
-            }
-            
-            debugLog(`Support ${i}: 处理segment "${expectedText.substring(0, 50)}..."`);
-            debugLog(`Support ${i}: 完整segment文本: "${expectedText}"`);
-            debugLog(`Support ${i}: segment长度: ${expectedText.length}`);
-            
-            // 在当前处理的文本中查找匹配的段落
-            let foundIndex = -1;
-            let searchStartIndex = 0;
-            
-            // 尝试多次搜索，以防有重复文本
-            while (true) {
-                const tempIndex = processedText.indexOf(expectedText, searchStartIndex);
-                if (tempIndex === -1) break;
+            if (linkMatches && linkMatches.length > 0) {
+                // 从 searchEntryPoint 提取链接
+                const searchLinks = linkMatches.map(match => {
+                    const url = match.match(/href="([^"]+)"/)[1];
+                    return url;
+                });
                 
-                // 检查这个位置是否已经被处理过（是否已经有引用标记）
-                const afterText = processedText.substring(tempIndex + expectedText.length, tempIndex + expectedText.length + 50);
-                if (!afterText.includes('<a href=')) {
-                    foundIndex = tempIndex;
-                    break;
-                }
+                // 使用搜索查询作为默认标题
+                const searchQuery = groundingMetadata.webSearchQueries[0] || '搜索结果';
                 
-                searchStartIndex = tempIndex + 1;
-            }
-            
-            if (foundIndex === -1) {
-                debugLog(`Support ${i}: 未找到匹配文本`);
-                // 添加更详细的调试信息
-                debugLog(`Support ${i}: 原文长度: ${processedText.length}`);
-                debugLog(`Support ${i}: 尝试模糊匹配...`);
-                
-                // 尝试去掉空格和换行符的匹配
-                const normalizedExpected = expectedText.replace(/\s+/g, ' ').trim();
-                const normalizedProcessed = processedText.replace(/\s+/g, ' ');
-                const fuzzyIndex = normalizedProcessed.indexOf(normalizedExpected);
-                
-                if (fuzzyIndex !== -1) {
-                    debugLog(`Support ${i}: 模糊匹配成功，位置: ${fuzzyIndex}`);
-                    
-                    // 根据模糊匹配的位置，在原文中找到实际位置
-                    // 计算在原文中的大概位置
-                    let charCount = 0;
-                    let realIndex = -1;
-                    
-                    for (let j = 0; j < processedText.length; j++) {
-                        if (processedText[j] !== ' ' && processedText[j] !== '\n' && processedText[j] !== '\t') {
-                            if (charCount === fuzzyIndex) {
-                                realIndex = j;
-                                break;
-                            }
-                            charCount++;
-                        }
+                // 将 searchEntryPoint 的链接添加到 sources
+                searchLinks.forEach(link => {
+                    let title = searchQuery;
+                    try {
+                        const url = new URL(link);
+                        title = url.hostname;
+                    } catch (e) {
+                        // 如果无法解析URL，使用搜索查询作为标题
                     }
                     
-                    // 从找到的位置开始，寻找最佳匹配
-                    if (realIndex !== -1) {
-                        // 在附近区域搜索最佳匹配
-                        const searchStart = Math.max(0, realIndex - 50);
-                        const searchEnd = Math.min(processedText.length, realIndex + expectedText.length + 50);
-                        const searchArea = processedText.substring(searchStart, searchEnd);
-                        
-                        // 尝试找到最佳匹配位置
-                        const bestMatch = searchArea.indexOf(expectedText.substring(0, 10)); // 用前10个字符匹配
-                        if (bestMatch !== -1) {
-                            foundIndex = searchStart + bestMatch;
-                            debugLog(`Support ${i}: 找到最佳匹配位置: ${foundIndex}`);
-                        }
+                    // 去重添加到 sources
+                    if (!sources.find(s => s.uri === link)) {
+                        sources.push({ uri: link, title });
                     }
-                }
-                
-                if (foundIndex === -1) {
-                    debugLog(`Support ${i}: 所有匹配方法都失败`);
-                    continue;
-                }
-            }
-            
-            const correctedEndIndex = foundIndex + expectedText.length;
-            debugLog(`Support ${i}: 在位置 ${foundIndex}-${correctedEndIndex} 找到匹配文本`);
-            
-            // 收集该段落引用的所有源
-            const citations = new Set();
-            for (const chunkIndex of groundingChunkIndices) {
-                if (chunkIndex < groundingMetadata.groundingChunks.length) {
-                    const chunk = groundingMetadata.groundingChunks[chunkIndex];
-                    if (chunk && chunk.web) {
-                        const { uri } = chunk.web;
-                        const sourceIndex = sourceMap.get(uri);
-                        if (sourceIndex) {
-                            citations.add(sourceIndex);
-                        }
-                    }
-                }
-            }
-            
-            if (citations.size > 0) {
-                // 将引用编号排序后生成HTML链接
-                const sortedCitations = Array.from(citations).sort((a, b) => a - b);
-                const citationStr = sortedCitations.map(idx => {
-                    const source = sources[idx - 1];
-                    if (source) {
-                        return `<a href="${source.uri}" target="_blank" style="color: #1a73e8; text-decoration: none; font-weight: 500;">[${idx}]</a>`;
-                    }
-                    return `[${idx}]`;
-                }).join('');
-                
-                // 在段落末尾插入引用标记
-                processedText = processedText.substring(0, correctedEndIndex) + 
-                               citationStr + 
-                               processedText.substring(correctedEndIndex);
-                
-                debugLog(`Support ${i}: 添加引用 ${citationStr}`);
-                
-                // 标记这个segment已经处理过
-                segmentProcessed.add(segmentKey);
-            } else {
-                debugLog(`Support ${i}: 没有找到有效的引用源`);
+                });
             }
         }
         
-        debugLog(`总共处理了 ${segmentProcessed.size} 个segment`);
-        
-        // 如果有引用源，添加Sources区块
-        if (sources.length > 0) {
-            // 在文本末尾添加空行和Sources区块
-            processedText += '\n\n**Sources** \n';
+        // 第二步：如果有 groundingChunks，优先使用其中的链接和标题
+        if (groundingMetadata.groundingChunks && groundingMetadata.groundingChunks.length > 0) {
+            debugLog('检测到groundingChunks，提取详细的源信息');
             
-            // 添加每个源的信息，带有超链接
-            sources.forEach((source, index) => {
-                const displayTitle = source.title || new URL(source.uri).hostname;
-                processedText += `${index + 1}. <a href="${source.uri}" target="_blank" style="color: #1a73e8; text-decoration: none;">${displayTitle}</a>\n`;
+            // 清空之前的 sources，优先使用 groundingChunks 中的信息
+            sources = [];
+            const sourceMap = new Map();
+            
+            groundingMetadata.groundingChunks.forEach((chunk, index) => {
+                if (chunk && chunk.web) {
+                    const { uri, title } = chunk.web;
+                    if (!sourceMap.has(uri)) {
+                        sourceMap.set(uri, sources.length + 1);
+                        sources.push({ uri, title: title || uri });
+                        // debugLog(`添加源 ${sources.length}: ${title || uri}`);
+                    }
+                }
             });
         }
         
-        debugLog('处理后文本长度:', processedText.length);
+        // 第三步：如果有 groundingSupports，进行精确的引用标记
+        if (groundingMetadata.groundingSupports && groundingMetadata.groundingSupports.length > 0 && sources.length > 0) {
+            debugLog('检测到groundingSupports，进行精确引用标记');
+            hasDetailedSupports = true;
+            
+            // 使用原有的精确引用逻辑
+            const sourceMap = new Map();
+            sources.forEach((source, index) => {
+                sourceMap.set(source.uri, index + 1);
+            });
+            
+            // 按照endIndex从大到小排序，从后向前插入引用标记
+            const sortedSupports = [...groundingMetadata.groundingSupports].sort((a, b) => 
+                b.segment.endIndex - a.segment.endIndex
+            );
+            
+            const segmentProcessed = new Set();
+            
+            for (let i = 0; i < sortedSupports.length; i++) {
+                const support = sortedSupports[i];
+                const { segment, groundingChunkIndices } = support;
+                
+                if (!segment || !segment.text) {
+                    continue;
+                }
+                
+                const expectedText = segment.text;
+                const segmentKey = `${segment.startIndex || 0}_${segment.endIndex}_${expectedText.substring(0, 50)}`;
+                
+                if (segmentProcessed.has(segmentKey)) {
+                    continue;
+                }
+                
+                // 查找匹配文本
+                let foundIndex = -1;
+                let searchStartIndex = 0;
+                
+                while (true) {
+                    const tempIndex = processedText.indexOf(expectedText, searchStartIndex);
+                    if (tempIndex === -1) break;
+                    
+                    const afterText = processedText.substring(tempIndex + expectedText.length, tempIndex + expectedText.length + 50);
+                    if (!afterText.includes('<a href=')) {
+                        foundIndex = tempIndex;
+                        break;
+                    }
+                    
+                    searchStartIndex = tempIndex + 1;
+                }
+                
+                if (foundIndex !== -1) {
+                    const correctedEndIndex = foundIndex + expectedText.length;
+                    
+                    // 收集该段落引用的所有源
+                    const citations = new Set();
+                    for (const chunkIndex of groundingChunkIndices) {
+                        if (chunkIndex < groundingMetadata.groundingChunks.length) {
+                            const chunk = groundingMetadata.groundingChunks[chunkIndex];
+                            if (chunk && chunk.web) {
+                                const { uri } = chunk.web;
+                                const sourceIndex = sourceMap.get(uri);
+                                if (sourceIndex) {
+                                    citations.add(sourceIndex);
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (citations.size > 0) {
+                        const sortedCitations = Array.from(citations).sort((a, b) => a - b);
+                        const citationStr = sortedCitations.map(idx => {
+                            const source = sources[idx - 1];
+                            if (source) {
+                                return `<a href="${source.uri}" target="_blank" style="color: #1a73e8; text-decoration: none; font-weight: 500;">[${idx}]</a>`;
+                            }
+                            return `[${idx}]`;
+                        }).join('');
+                        
+                        processedText = processedText.substring(0, correctedEndIndex) + 
+                                       citationStr + 
+                                       processedText.substring(correctedEndIndex);
+                        
+                        segmentProcessed.add(segmentKey);
+                    }
+                }
+            }
+        }
+        
+        // 第四步：如果没有精确的 groundingSupports，但有源链接，在文本末尾添加简单引用
+        if (!hasDetailedSupports && sources.length > 0) {
+            debugLog('没有精确引用信息，在文本末尾添加简单引用');
+            
+            if (!processedText.includes('[1]')) {
+                    // 找到最后一个句号或句子结尾
+                const lastSentenceEnd = Math.max(
+                    processedText.lastIndexOf('。'),
+                    processedText.lastIndexOf('.'),
+                    processedText.lastIndexOf('？'),
+                    processedText.lastIndexOf('?'),
+                    processedText.lastIndexOf('！'),
+                    processedText.lastIndexOf('!')
+                );
+                
+                if (lastSentenceEnd !== -1) {
+                    // 在最后一个标点符号后添加引用标记
+                    processedText = processedText.substring(0, lastSentenceEnd + 1) + 
+                                  ` <a href="${sources[0].uri}" target="_blank" style="color: #1a73e8; text-decoration: none; font-weight: 500;">[1]</a>` + 
+                                  processedText.substring(lastSentenceEnd + 1);
+                } else {
+                    processedText += ` <a href="${sources[0].uri}" target="_blank" style="color: #1a73e8; text-decoration: none; font-weight: 500;">[1]</a>`;
+                }
+            }
+        }
+        
+        // 最后一步：添加 Sources 区块
+        if (sources.length > 0) {
+            processedText += '\n\n**Sources**\n\n';
+            
+            sources.forEach((source, index) => {
+                const displayTitle = source.title || new URL(source.uri).hostname;
+                processedText += `[${index + 1}] [${displayTitle}](${source.uri})\n\n`;
+            });
+        }
+        
+        debugLog('处理后文本长度:' + processedText.length);
         return processedText;
     } catch (error) {
         console.error('处理groundingMetadata时出错:', error);
@@ -1258,11 +1544,6 @@ async function callGeminiDrawAPI(contents, apiType, expectJson = false, fallback
             alert('请先在设置面板中设置您的 API Key，然后刷新页面！');
             throw new Error('未设置 API Key，请在设置面板中设置您的 Google Gemini API Key');
         }
-
-        // 使用用户配置的MODEL，如果没有则使用默认值
-        // 注意：对于多模态，我们需要使用支持图像生成的模型
-        let MODEL_ID = 'gemini-2.5-flash-lite-preview-06-17';
-		// 'gemini-2.0-flash-preview-image-generation'; // 默认值
         
         // 尝试从存储中获取用户配置的MODEL
         if (isExtensionEnvironment && chrome.storage) {
@@ -1398,12 +1679,21 @@ function analyzePageContent() {
 
 }
 
-// a 全文分析 提取页面内容
+// 1.a 全文分析 提取页面内容
 function extractPageContent() {
     debugLog('第一步：提取页面内容 --->');
     
     // 获取所有内容区域
-    const contentAreas = findContentAreas();
+    let contentAreas = findContentAreas();
+    
+    // 查找页面主标题（可能在内容区域外）
+    const mainHeadings = document.querySelectorAll('h1');
+    if (mainHeadings.length > 0) {
+        // 将标题添加到内容区域前面，确保优先处理
+        contentAreas = Array.from(mainHeadings).concat(contentAreas);
+        debugLog(`找到页面标题元素: ${mainHeadings.length}个`);
+        debugLog(`第一个标题：` + mainHeadings[0].textContent);
+    }
     
     // 获取排除UI元素的选择器
     const excludeSelectors = getExcludeSelectors();
@@ -1414,8 +1704,15 @@ function extractPageContent() {
     
     // 处理每个内容区域
     contentAreas.forEach(contentArea => {
-        // 获取所有段落、标题和列表项
-        const elements = contentArea.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li');
+        let elements = [];
+        
+        // 如果contentArea本身就是标题元素，直接处理
+        if (contentArea.tagName && ['H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(contentArea.tagName)) {
+            elements = [contentArea];
+        } else {
+            // 获取所有段落、标题和列表项，针对特殊格式添加span元素
+            elements = contentArea.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, span[style*="font-size"]');
+        }
         
         elements.forEach(element => {
             // 如果元素已经处理过，则跳过
@@ -1437,65 +1734,60 @@ function extractPageContent() {
             
             // 排除空元素或者只有空格的元素
             const text = element.textContent.trim();
-            if (!text || text.length < 5) { // 排除非常短的段落
+            if (!text || text.length < 5) {
+                shouldExclude = true;
+            }
+            
+            // 排除目录相关元素
+            if (element.id && (element.id.includes('toc') || element.name === 'tableOfContents')) {
                 shouldExclude = true;
             }
             
             if (!shouldExclude) {
                 paragraphs.push(element);
-                // // 添加ID
-                // element.id = 'paragraph-' + idCounter;
-                // idCounter++;
             }
         });
     });
     
-    // 构建内容
-    let content = '';
-    paragraphs.forEach((paragraph, index) => {
-        // 添加段落ID信息
-        content += `[paragraph-${index}] ${paragraph.textContent.trim()}\n\n`;
-    });
-    
-    // 如果提取的内容为空，尝试获取所有可见文本
-    if (!content.trim()) {
-        debugLog('提取的内容为空，尝试获取所有可见文本');
-        const textNodes = [];
+    // 如果没有找到足够的内容，尝试备用方法
+    if (paragraphs.length < 5) {
+        debugLog('未找到足够段落，尝试备用方法');
         const walker = document.createTreeWalker(
-            document.body, 
-            NodeFilter.SHOW_TEXT, 
+            document.body,
+            NodeFilter.SHOW_TEXT,
             { acceptNode: node => node.textContent.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT }
         );
-        
         let node;
-        let idCounter = paragraphs.length; // 从已有段落数量开始计数
-        
         while (node = walker.nextNode()) {
-            const text = node.textContent.trim();
-            if (text && text.length >= 8) { // 只获取有意义的文本
-                // 检查节点的父元素是否已经处理过
-                const parentElement = node.parentElement;
-                if (parentElement && !processedElements.has(parentElement)) {
-                    // 标记为已处理
+            const parentElement = node.parentElement;
+            if (
+                parentElement &&
+                !processedElements.has(parentElement) &&
+                node.textContent.trim().length >= 8
+            ) {
+                // 检查是否在排除区域内
+                let shouldExclude = false;
+                for (const selector of excludeSelectors) {
+                    if (parentElement.closest(selector)) {
+                        shouldExclude = true;
+                        break;
+                    }
+                }
+                
+                if (!shouldExclude) {
                     processedElements.add(parentElement);
-                    
-                    // 为父元素添加ID
-                    // if (!parentElement.id) {
-                    //     parentElement.id = 'paragraph-' + idCounter;
-                    // }
-                    
-                    // 添加到内容中
-                    textNodes.push(text);
-                    content += `[paragraph-${idCounter}] ${text}\n\n`;
-                    
-                    // 增加计数器
-                    idCounter++;
+                    paragraphs.push(parentElement);
                 }
             }
         }
-        
-        debugLog(`使用TreeWalker提取了 ${textNodes.length} 个文本节点`);
     }
+    
+    // 构建内容
+    let content = '';
+    paragraphs.forEach((paragraph, index) => {
+        const text = paragraph.textContent.trim();
+        content += `[paragraph-${index}] ${text}\n\n`;
+    });
     
     debugLog('第一步：---> 提取页面内容长度: ' + content.length);
     
@@ -1505,7 +1797,7 @@ function extractPageContent() {
     return content;
 }
 
-// b 全文分析 显示文本编辑区域（待人工确认）
+// 1.b 全文分析 显示文本编辑区域（待人工确认）
 function showTextEditor(content) {
     debugLog('第二步：显示文本编辑区域 待确认分析内容');
     
@@ -1574,7 +1866,7 @@ function showTextEditor(content) {
     }
 }
 
-// c 全文分析 调用LLM API（人工已确认）
+// 1.c 全文分析 调用LLM API（人工已确认）
 async function analyzeContent(content) {
     debugLog('第三步：确认分析字数：' + content.length + '，预览: ' + content.substring(0, 100) + '...');
     
@@ -1632,12 +1924,19 @@ async function analyzeContent(content) {
     }
 }
 
-// d 全文分析完成 为段落添加ID 这个方法对于长文会导致页面卡顿 谨慎！
+// 1.d 全文分析完成 为段落添加ID 这个方法对于长文会导致页面卡顿 谨慎！
 async function addParagraphIds() {
     debugLog('第四步：为段落添加ID --->');
     
-    // 获取内容区域
-    const contentAreas = findContentAreas();
+    // 获取内容区域 - 与extractPageContent保持一致
+    let contentAreas = findContentAreas();
+    
+    // 查找页面主标题（可能在内容区域外）
+    const mainHeadings = document.querySelectorAll('h1');
+    if (mainHeadings.length > 0) {
+        contentAreas = Array.from(mainHeadings).concat(contentAreas);
+        debugLog(`找到页面标题元素: ${mainHeadings.length}个`);
+    }
     
     // 获取排除UI元素的选择器
     const excludeSelectors = getExcludeSelectors();
@@ -1648,12 +1947,19 @@ async function addParagraphIds() {
     
     // 处理每个内容区域
     contentAreas.forEach(contentArea => {
-        // 获取所有段落、标题和列表项
-        const elements = contentArea.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li');
+        let elements = [];
         
-        elements.forEach((element) => {
-            // 如果元素已经处理过，则跳过
-            if (processedElements.has(element)) {
+        // 如果contentArea本身就是标题元素，直接处理
+        if (contentArea.tagName && ['H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(contentArea.tagName)) {
+            elements = [contentArea];
+        } else {
+            // 获取所有段落、标题和列表项，针对特殊格式添加span元素
+            elements = contentArea.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, span[style*="font-size"]');
+        }
+        
+        elements.forEach(element => {
+            // 如果元素已经处理过或已有ID，则跳过
+            if (processedElements.has(element) || element.id) {
                 return;
             }
             
@@ -1675,17 +1981,21 @@ async function addParagraphIds() {
                 shouldExclude = true;
             }
             
+            // 排除目录相关元素
+            if (element.id && (element.id.includes('toc') || element.name === 'tableOfContents')) {
+                shouldExclude = true;
+            }
+            
             if (!shouldExclude) {
-                // 添加ID
                 element.id = 'paragraph-' + idCounter;
                 idCounter++;
             }
         });
     });
 
-    // 如果没有给任何元素分配ID，则为可见文本的父元素补充ID
-    if (idCounter === 0) {
-        debugLog('未找到有效段落，为可见文本父元素补充ID');
+    // 如果没有找到足够的内容，尝试备用方法
+    if (idCounter < 5) {
+        debugLog('未找到足够段落，为可见文本父元素补充ID');
         const walker = document.createTreeWalker(
             document.body,
             NodeFilter.SHOW_TEXT,
@@ -1698,15 +2008,24 @@ async function addParagraphIds() {
                 parentElement &&
                 !processedElements.has(parentElement) &&
                 !parentElement.id &&
-                node.textContent.trim().length >= 8 // 只处理有意义的文本
+                node.textContent.trim().length >= 8
             ) {
-                processedElements.add(parentElement);
-                parentElement.id = 'paragraph-' + idCounter;
-                idCounter++;
+                // 检查是否在排除区域内
+                let shouldExclude = false;
+                for (const selector of excludeSelectors) {
+                    if (parentElement.closest(selector)) {
+                        shouldExclude = true;
+                        break;
+                    }
+                }
+                
+                if (!shouldExclude) {
+                    processedElements.add(parentElement);
+                    parentElement.id = 'paragraph-' + idCounter;
+                    idCounter++;
+                }
             }
         }
-    } else {
-        debugLog('跳过段落ID' + idCounter);
     }
     
     debugLog(`第四步：---> 共添加了 ${idCounter} 个段落ID`);
@@ -1793,7 +2112,7 @@ function showAnalysisResults(analysisResult) {
     }
     
     // 使用默认值，如果没有提供分析结果
-    const summary = analysisResult?.summary || "这是一篇关于深度学习模型的文章，讨论了模型解释性的重要性、现有技术和未来发展方向。";
+    const summary = analysisResult?.summary || "这是一篇文章，讨论了未来发展方向。";
     
     // 显示分析结果
     const deepreadContent = document.getElementById('deepread-content');
@@ -1877,7 +2196,7 @@ function showAnalysisResults(analysisResult) {
         
         // 添加欢迎消息
         if (chatHistory.length === 0) {
-            addChatMessage('您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。', 'assistant');
+            addChatMessage(greetingMessage, 'assistant');
         } else {
             // 恢复历史消息
             chatHistory.forEach(msg => {
@@ -2413,7 +2732,7 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
         
         // 添加欢迎消息
         if (chatHistory.length === 0) {
-            addChatMessage('您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。', 'assistant');
+            addChatMessage(greetingMessage, 'assistant');
         } else {
             // 恢复历史消息
             chatHistory.forEach(msg => {
@@ -2657,7 +2976,7 @@ function renderImagePreviews() {
     });
 }
 
-// 聊天对话
+// 聊天对话（核心代码）
 async function sendChatMessage() {
     const chatInput = document.getElementById('deepread-chat-input');
     if (!chatInput) {
@@ -2693,7 +3012,7 @@ async function sendChatMessage() {
         }
         
         // 调用LLM API获取回答 // const response = mockChatResponse(message);
-        const responseText = await getChatResponse(message, chatHistory, pageContent, selectedImages);
+        const responseText = await chatWithAI(message, chatHistory, pageContent, selectedImages);
         const response = processChatResponse(responseText);
         addChatMessage(response, 'assistant');
         
@@ -2709,7 +3028,7 @@ async function sendChatMessage() {
         });
     } catch (error) {
         console.error('处理聊天回答时出错:', error);
-        addChatMessage('抱歉，处理您的消息时出现了问题。', 'assistant');
+        addChatMessage(chatResponseFallback, 'assistant');
     }
 }
 
@@ -2720,7 +3039,7 @@ async function sendChatMessage() {
  * @param pageContent 页面内容摘要
  * @returns 聊天回答
  */
-async function getChatResponse(userMessage, chatHistory = [], pageContent = '', images = []) {
+async function chatWithAI(userMessage, chatHistory = [], pageContent = '', images = []) {
     debugLog(`images: ${images && images.length > 0 ? images.length + '张图片' : '无图片'}`);
     debugLog('开始获取聊天回答，用户消息：' + userMessage);
     debugLog('聊天历史长度：' + chatHistory.length);
@@ -2816,13 +3135,155 @@ async function getChatResponse(userMessage, chatHistory = [], pageContent = '', 
 
     // 6. 根据有无图片，智能选择并调用API
     if (images && images.length > 0) {
-        // 有图片，调用多模态API
-        debugLog('对话总字符数：' + totalChars + "调用多模态API (callGeminiAPI)");
+        // 有图片，调用多模态API，仍然使用非流式API
+        debugLog('对话总字符数：' + totalChars + "，调用多模态API (callGeminiAPI)");
         return await callGeminiAPI(contents, '多模态聊天', false, chatResponseFallback);
     } else {
-        // 没有图片，调用常规文本API
-        debugLog('对话总字符数：' + totalChars + "调用文本API (callGeminiAPI)");
-        return await callGeminiAPI(contents, '聊天', false, chatResponseFallback);
+        // 没有图片，调用流式文本API
+        debugLog('对话总字符数：' + totalChars + "，调用流式文本API (callGeminiAPIStream)");
+        
+        // 返回一个Promise，在流式响应完成时解析
+        return new Promise((resolve, reject) => {
+            // 使用现有的addChatMessage创建一个预加载状态的消息（核心代码）
+            const messageId = addChatMessage('', 'assistant', true);
+            if (!messageId) {
+                reject(new Error('创建聊天消息失败'));
+                return;
+            }
+            
+            let accumulatedText = '';
+            const converter = new showdown.Converter({
+                tables: true,
+                simplifiedAutoLink: true,
+                strikethrough: true,
+                tasklists: true
+            });
+            
+            // 定义每个数据块的回调函数
+            const onChunk = (chunkText) => {
+                // 累积文本
+                accumulatedText += chunkText;
+                
+                // 实时更新UI
+                const messageElement = document.getElementById(messageId);
+                if (messageElement) {
+                    // 获取或创建消息文本元素
+                    let textElement = messageElement.querySelector('.message-text-content');
+                    if (!textElement) {
+                        textElement = document.createElement('div');
+                        textElement.className = 'message-text-content';
+                        messageElement.appendChild(textElement);
+                    }
+                    
+                    // 移除加载标识
+                    messageElement.classList.remove('loading');
+                    
+                    // 将累积的文本转换为HTML并显示
+                    const htmlContent = converter.makeHtml(accumulatedText);
+                    textElement.innerHTML = htmlContent;
+                    
+                    // 滚动到最新消息
+                    messageElement.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                }
+            };
+            
+            // 定义完成回调函数
+            const onComplete = (processedResponse) => {
+                // 更新最终的消息内容
+                const messageElement = document.getElementById(messageId);
+                if (messageElement) {
+                    // 获取或创建消息文本元素
+                    let textElement = messageElement.querySelector('.message-text-content');
+                    if (!textElement) {
+                        textElement = document.createElement('div');
+                        textElement.className = 'message-text-content';
+                        messageElement.appendChild(textElement);
+                    }
+                    
+                    // 直接使用已经处理过的响应（包含引用标记和Sources区块）
+                    // 不再调用processChatResponse，避免重复处理
+                    if (typeof showdown !== 'undefined') {
+                        try {
+                            const converter = new showdown.Converter({
+                                tables: true,
+                                simplifiedAutoLink: true,
+                                strikethrough: true,
+                                tasklists: true
+                            });
+                            textElement.innerHTML = converter.makeHtml(processedResponse);
+                        } catch (e) {
+                            console.error('Showdown处理失败:', e);
+                            textElement.innerHTML = processedResponse;
+                        }
+                    } else {
+                        textElement.innerHTML = processedResponse;
+                    }
+                    
+                    // 为消息添加操作按钮
+                    const actionsContainer = createChatMessageActions(messageId, processedResponse, 'assistant');
+                    
+                    // 移除现有的操作按钮容器（如果有）
+                    const existingActions = messageElement.querySelector('.message-actions');
+                    if (existingActions) {
+                        existingActions.remove();
+                    }
+                    
+                    // 添加新的操作按钮容器
+                    messageElement.appendChild(actionsContainer);
+                    
+                    // 滚动到最新消息
+                    messageElement.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                }
+                
+                // 解析Promise，返回处理后的响应
+                resolve(processedResponse);
+
+                // 移除
+                removeChatMessage(messageId);
+            };
+            
+            // 定义错误回调函数
+            const onError = (error) => {
+                console.error('流式聊天API调用错误:', error);
+                
+                // 更新UI显示错误
+                const messageElement = document.getElementById(messageId);
+                if (messageElement) {
+                    // 获取或创建消息文本元素
+                    let textElement = messageElement.querySelector('.message-text-content');
+                    if (!textElement) {
+                        textElement = document.createElement('div');
+                        textElement.className = 'message-text-content';
+                        messageElement.appendChild(textElement);
+                    }
+                    
+                    // 移除加载标识并添加错误样式
+                    messageElement.classList.remove('loading');
+                    messageElement.classList.add('error');
+                    
+                    // 显示错误信息
+                    textElement.innerHTML = `<p>出错了: ${error.message || '未知错误'}</p>`;
+                    
+                    // 为消息添加操作按钮
+                    const actionsContainer = createChatMessageActions(messageId, `出错了: ${error.message || '未知错误'}`, 'assistant');
+                    
+                    // 移除现有的操作按钮容器（如果有）
+                    const existingActions = messageElement.querySelector('.message-actions');
+                    if (existingActions) {
+                        existingActions.remove();
+                    }
+                    
+                    // 添加新的操作按钮容器
+                    messageElement.appendChild(actionsContainer);
+                }
+                
+                // 返回错误信息
+                reject(error);
+            };
+            
+            // 调用流式API
+            callGeminiAPIStream(contents, '聊天', onChunk, onComplete, onError);
+        });
     }
 }
 
@@ -2911,7 +3372,7 @@ function processChatResponse(llmResponse) {
 
 // *********************************************** 以下是业务工具函数 ***********************************************
 
-// 导航到上一个或下一个概念
+// 导航到上一个或下一个概念（核心代码）
 function navigateConcept(direction) {
     debugLog(`开始导航函数: 方向=${direction}`);
     
@@ -3362,7 +3823,7 @@ function initChatEvents() {
     // 例如：历史对话、新建对话、保存对话等按钮的事件监听
 }
 
-// 添加聊天消息到对话历史
+// 添加聊天消息到对话历史（核心代码）
 function addChatMessage(message, role, isLoading = false, addToHistory = true, images = []) {
     const chatMessages = document.getElementById('deepread-chat-messages');
     if (!chatMessages) {
@@ -3690,7 +4151,7 @@ function addActionButtonsToExistingMessages() {
     }
 }
 
-// 将当前概念解释插入到聊天区域
+// 将当前概念解释插入到聊天对话区域
 function insertConceptToChat() {
     try {
         // 获取当前概念信息
@@ -3748,7 +4209,7 @@ async function clearChatHistory() {
                 chatMessages.innerHTML = '';
                 
                 // 添加欢迎消息，但不将其添加到聊天历史
-                addChatMessage('您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。', 'assistant', false, false);
+                addChatMessage(greetingMessage, 'assistant', false, false);
             }
             
             // 用mcp保存聊天记忆
@@ -3776,7 +4237,7 @@ async function clearChatHistory() {
 
 // *********************************************** 以下是全局公共工具函数 ***********************************************
 
-// 调试输出函数
+// 调试输出函数（核心代码）
 function debugLog(message) {
     console.debug('DEBUG <-----> ' + message);
     // 在Chrome扩展环境中，不需要显示调试区域
@@ -3965,7 +4426,6 @@ function createSettingsPanel() {
     
     // 获取当前保存的API Key和MODEL
     let savedApiKey = '';
-    let savedModel = 'gemini-2.5-flash-lite-preview-06-17'; // 默认值
     
     // 使用Chrome存储API获取设置
     if (isExtensionEnvironment && chrome.storage) {
@@ -3977,14 +4437,14 @@ function createSettingsPanel() {
                 document.getElementById('deepread-model').value = result.deepread_model;
             } else {
                 // 如果没有保存的MODEL，使用默认值
-                document.getElementById('deepread-model').value = savedModel;
+                document.getElementById('deepread-model').value = MODEL_ID;
             }
         });
     }
     
-    // 添加API Key设置和缓存管理
+    // 模型设置和缓存管理
     // <input type="text" id="deepread-model" class="deepread-settings-input" 
-                //        value="${savedModel}" placeholder="可选，请配置MODEL...">
+    //        value="${savedModel}" placeholder="可选，请配置MODEL...">
     content.innerHTML = `
         <div class="deepread-settings-section">
             <h3 id="deepread-settings-title-api">API 设置</h3>
@@ -3992,7 +4452,6 @@ function createSettingsPanel() {
                 <a href="https://aistudio.google.com/apikey">Google Gemini API Key</a>
                 <input type="text" id="deepread-api-key" class="deepread-settings-input" 
                        value="${savedApiKey}" placeholder="输入您的API Key...">
-                
             </div>
             <button id="deepread-save-settings" class="deepread-btn">保存设置</button>
         </div>
@@ -4152,7 +4611,7 @@ function preventDuplicateClick(actionKey, callback, cooldownMs = 5000, cooldownM
     return true;
 }
 
-// 生成唯一ID
+// 生成唯一ID（核心代码）
 let messageCounter = 0;
 function generateUniqueId() {
     return 'msg-' + Date.now() + '-' + (messageCounter++);
