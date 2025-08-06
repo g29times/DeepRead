@@ -26,6 +26,25 @@
     /* font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; */
 }
 
+/* 确保DeepRead面板中的文本可以被选中 */
+.deepread-container,
+.deepread-container *:not(.deepread-resize-handle):not(.deepread-vertical-resizer),
+.deepread-nav-indicator {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+    -moz-user-select: text !important;
+    -ms-user-select: text !important;
+}
+
+/* 拖动手柄禁用文本选择 */
+.deepread-resize-handle,
+.deepread-vertical-resizer {
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    -moz-user-select: none !important;
+    -ms-user-select: none !important;
+}
+
 /* 深度阅读面板 */
 .deepread-container {
     position: fixed;

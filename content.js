@@ -19,6 +19,7 @@ const isExtensionEnvironment = typeof chrome !== 'undefined' && chrome.runtime &
 
 // 'gemini-2.0-flash-preview-image-generation';
 const MODEL_ID = 'gemini-2.5-flash-lite'
+const default_bot_language = '中文'
 const greetingMessage = '您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。';
 const pageSummaryFallback = '抱歉，我暂时无法分析页面内容。请稍后再试。';
 const conceptExplanationFallback = '的解释暂时无法获取。请稍后再试。';
@@ -32,7 +33,8 @@ const currentUrl = window.location.href;
 let pageTitle = document.title;
 let pageContent = ''; // 存储页面内容
 let pageSummary = ''; // 存储页面摘要
-let pageKeyTerms = []; // 存储页面关键术语
+let pageKeyTerms = []; // 存储页面关键概念
+let pageKeyParagraphs = []; // 存储页面关键段落
 
 // 聊天历史
 let chatHistory = [];
@@ -63,6 +65,7 @@ function setupClearCacheShortcut() {
                         pageAnalyzed = false;
                         pageSummary = '';
                         pageKeyTerms = [];
+                        pageKeyParagraphs = [];
                         chatHistory = [];
                         conceptHistory = [];
                         currentConceptIndex = -1;
@@ -80,7 +83,7 @@ function setupClearCacheShortcut() {
             }
         }
     });
-    console.log('已设置清除缓存快捷键 Alt+Shift+C');
+    console.log('DeepRead: 已设置清除缓存快捷键 Alt+Shift+C');
 }
 
 // 初始化 注意：不要再这个init方法里自动展开面板，
@@ -121,6 +124,7 @@ async function init() {
                 pageContent = cachedPageContent.content || '';
                 pageSummary = cachedPageContent.summary || '';
                 pageKeyTerms = cachedPageContent.keyTerms || [];
+                pageKeyParagraphs = cachedPageContent.keyParagraphs || [];
             
                 // 加载当前页面的分析状态
                 // pageAnalyzed = await window.cacheManager.loadPageAnalyzedStatus(currentUrl);
@@ -133,7 +137,9 @@ async function init() {
                     && pageSummary.length > 0 
                     && pageSummary != pageSummaryFallback
                     && pageKeyTerms 
-                    && pageKeyTerms.length > 0;
+                    && pageKeyTerms.length > 0
+                    && pageKeyParagraphs 
+                    && pageKeyParagraphs.length > 0;
                 
                 // 如果缓存内容有效，更新页面分析状态
                 if (contentValid) {
@@ -142,7 +148,7 @@ async function init() {
                     // 同时更新缓存中的状态
                     await window.cacheManager.savePageAnalyzedStatus(currentUrl, true);
                     console.log('缓存内容有效，设置pageAnalyzed = true');
-                    console.log('摘要长度:', pageSummary.length, '关键术语数量:', pageKeyTerms.length);
+                    console.log('摘要长度:', pageSummary.length, '关键概念数量:', pageKeyTerms.length, '关键段落数量:', pageKeyParagraphs.length);
                 } else {
                     // 如果缓存内容无效，确保页面分析状态为false
                     pageAnalyzed = false;
@@ -196,17 +202,19 @@ if (isExtensionEnvironment) {
                 window.cacheManager.loadPageContent(currentUrl)
                     .then(cachedPageContent => {
                         if (cachedPageContent && cachedPageContent.summary && cachedPageContent.keyTerms) {
-                            console.log('加载全文分析缓存，关键术语数量:', cachedPageContent.keyTerms.length);
+                            console.log('加载全文分析缓存，关键概念数量:', cachedPageContent.keyTerms.length);
                             // 更新全局变量
                             pageSummary = cachedPageContent.summary;
                             pageKeyTerms = cachedPageContent.keyTerms;
+                            pageKeyParagraphs = cachedPageContent.keyParagraphs;
                         } else {
                             console.log('缓存加载失败或缓存内容不完整，使用当前内存中的数据');
                         }
                         // 全文分析结果
                         showAnalysisResults({
                             summary: pageSummary,
-                            keyTerms: pageKeyTerms
+                            keyTerms: pageKeyTerms,
+                            keyParagraphs: pageKeyParagraphs
                         });
                     })
                     .catch(error => {
@@ -214,7 +222,8 @@ if (isExtensionEnvironment) {
                         // 出错时使用当前内存中的数据
                         showAnalysisResults({
                             summary: pageSummary,
-                            keyTerms: pageKeyTerms
+                            keyTerms: pageKeyTerms,
+                            keyParagraphs: pageKeyParagraphs
                         });
                     });
                 sendResponse({status: 'success', message: '从缓存恢复分析结果'});
@@ -250,6 +259,10 @@ function createDeepReadPanel() {
     if (document.getElementById('deepread-panel')) {
         return;
     }
+    
+    // 强制重置文本选择功能，确保用户可以选中文本
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
     
     // 创建主容器
     const container = document.createElement('div');
@@ -454,12 +467,15 @@ function initResizeHandlers(container, resizeHandle) {
     
     // 开始拖动
     resizeHandle.addEventListener('mousedown', function(e) {
+        console.log('开始水平拖动 - 禁用部分文本选择');
         isResizing = true;
         startX = e.clientX;
         startWidth = parseInt(document.defaultView.getComputedStyle(container).width, 10);
         resizeHandle.classList.add('active');
         document.body.style.cursor = 'ew-resize';
-        document.body.style.userSelect = 'none'; // 防止拖动时选中文本
+        // 只在拖动手柄上禁用文本选择，而不是整个页面
+        resizeHandle.style.userSelect = 'none';
+        container.style.userSelect = 'none';
         
         // 阻止事件冒泡和默认行为
         e.preventDefault();
@@ -484,8 +500,9 @@ function initResizeHandlers(container, resizeHandle) {
     });
     
     // 结束拖动
-    document.addEventListener('mouseup', function() {
+    window.addEventListener('mouseup', function() {
         if (isResizing) {
+            console.log('结束水平拖动 - 恢复文本选择');
             isResizing = false;
             resizeHandle.classList.remove('active');
             document.body.style.cursor = '';
@@ -496,7 +513,7 @@ function initResizeHandlers(container, resizeHandle) {
 
 // 初始化垂直拖动功能 showAnalysisResults -> initVerticalResizeHandlers
 function initVerticalResizeHandlers() {
-    console.log('初始化垂直拖动功能');
+    console.log('DeepRead: 初始化垂直拖动功能');
     // 使用document.querySelector而非container.querySelector来确保能找到元素
     const explanationSection = document.querySelector('#deepread-explanation-section-id');
     const verticalResizer = document.querySelector('#deepread-vertical-resizer');
@@ -517,8 +534,6 @@ function initVerticalResizeHandlers() {
     if (!explanationSection.style.height) {
         explanationSection.style.height = '300px';
     }
-
-    console.log('DeepRead: 初始化垂直拖动功能');
     
     // 先移除可能存在的旧事件监听器
     const newResizer = verticalResizer.cloneNode(true);
@@ -551,12 +566,13 @@ function initVerticalResizeHandlers() {
         updatedResizer.style.backgroundColor = '#a0a0a0'; // 拖动时变色
         
         // 更改鼠标样式和禁用文本选择
+        console.log('开始垂直拖动 - 禁用文本选择');
         document.body.style.cursor = 'ns-resize';
         document.body.style.userSelect = 'none';
         
         // 直接在document上添加事件监听器
         document.addEventListener('mousemove', handleMouseMove);
-        document.addEventListener('mouseup', handleMouseUp);
+        window.addEventListener('mouseup', handleMouseUp);
         
         function handleMouseMove(e) {
             if (!window.isVerticalResizing) return;
@@ -599,11 +615,13 @@ function initVerticalResizeHandlers() {
         function handleMouseUp(e) {
             window.isVerticalResizing = false;
             document.removeEventListener('mousemove', handleMouseMove);
-            document.removeEventListener('mouseup', handleMouseUp);
+            window.removeEventListener('mouseup', handleMouseUp);
             
             // 恢复鼠标样式和文本选择
+            console.log('结束垂直拖动 - 恢复文本选择');
             document.body.style.cursor = '';
             document.body.style.userSelect = '';
+            
             updatedResizer.classList.remove('active');
             updatedResizer.style.backgroundColor = '#e0e0e0'; // 恢复原色
             
@@ -671,7 +689,7 @@ function getExcludeSelectors() {
     ];
 }
 
-// 页面加载时 添加文本选择（用户选择文本，点击浮动按钮）事件监听
+// 用户选择文本，点击浮动按钮 事件监听
 function addTextSelectionListener() {
     debugLog('添加文本选择事件监听');
     
@@ -714,12 +732,12 @@ function addTextSelectionListener() {
             // 添加到页面
             document.body.appendChild(floatButton);
             
-            // 5秒后自动移除浮动按钮
+            // 60秒后自动移除浮动按钮
             setTimeout(function() {
                 if (document.body.contains(floatButton)) {
                     document.body.removeChild(floatButton);
                 }
-            }, 5000);
+            }, 60000);
         }
     });
 }
@@ -1695,7 +1713,11 @@ function extractPageContent() {
         // 将标题添加到内容区域前面，确保优先处理
         contentAreas = Array.from(mainHeadings).concat(contentAreas);
         debugLog(`找到页面标题元素: ${mainHeadings.length}个`);
-        debugLog(`第一个标题：` + mainHeadings[0].textContent);
+        // debugLog(`第一个标题：` + mainHeadings[0].textContent);
+        // debuglog foreach mainHeadings
+        mainHeadings.forEach(heading => {
+            debugLog(`标题：` + heading.textContent);
+        });
     }
     
     // 获取排除UI元素的选择器
@@ -1880,17 +1902,18 @@ async function analyzeContent(content) {
     }
     try {
         // 调用LLM API获取分析结果
-        const llmResponse = await callAnalyzeContent(content);
+        const llmResponse = await callAnalyzeContent(content, default_bot_language);
         // 如果调用失败，使用预设数据
         if (!llmResponse || llmResponse.summary == pageSummaryFallback) {
             console.error('获取分析结果失败');
             return;
         }
-        // 存储关键术语，并更新页面内容
+        // 存储关键概念，并更新页面内容
         if (llmResponse && llmResponse.keyTerms) {
             window.keyTerms = llmResponse.keyTerms;
             pageContent = content;
             pageKeyTerms = llmResponse.keyTerms;
+            pageKeyParagraphs = llmResponse.keyParagraphs;
             pageSummary = llmResponse.summary || '';
             
             // 保存页面内容到缓存
@@ -1901,6 +1924,7 @@ async function analyzeContent(content) {
                     content: pageContent,
                     summary: pageSummary,
                     keyTerms: pageKeyTerms,
+                    keyParagraphs: pageKeyParagraphs,
                     timestamp: Date.now()
                 };
                 window.cacheManager.savePageContent(pageData)
@@ -2037,19 +2061,19 @@ async function addParagraphIds() {
 /**
  * 调用API进行全文理解 analyzeContent -> callAnalyzeContent
  * @param {string} content 页面内容
- * @returns {Promise<Object>} 分析结果，包含摘要和关键术语
+ * @returns {Promise<Object>} 分析结果，包含摘要和关键概念
  */
-async function callAnalyzeContent(content) {
+async function callAnalyzeContent(content, language) {
     debugLog('开始分析全文内容，长度：' + content.length);
     
     // 系统提示词
     const systemPrompt = `
         我是一个专业的深度阅读助手DeepRead，帮助用户进行网页浏览和理解。
-        我和用户正在查看一个网页，网页的内容是文章/资料/视频等，
-        我会使用中文进行总结，但对于部分必要的专有名字，我会在括号中附上原文。
-        对于普通页面，我会给出核心主题/摘要和关键术语（方便用户点击并跳转以进一步浏览）。
-            如果是论文等学术研究内容，我可能会为内容摘要提供“背景知识、主要内容、研究方法、应用场景、面临挑战、结论”等信息。
-        对于视频页，我会基于视频字幕脚本给出视频内容摘要，但不提供关键术语（视频页无需跳转）。
+        用户正在查看一个网页，网页的内容形式是文章/资料/视频等，
+        我会使用${language}进行总结，但对于有必要提供原文的专业术语等，我会在括号中附上原文。
+        对于常规页面，我会给出核心主题/内容摘要和关键概念和关键段落（方便用户点击并跳转）。
+        对于视频页，我会基于视频字幕（如有）给出视频内容摘要，但不提供相关概念和相关段落。
+        如果页面缺失原始段落编号，我会解释相关概念，但不提供相关段落。
 
         ---
         
@@ -2062,13 +2086,23 @@ async function callAnalyzeContent(content) {
         我会按以下JSON格式返回结果：
         {
             "summary": "内容摘要，简要描述网页的主题和要点",
-            "keyTerms": ["关键术语1", "关键术语2", ...]
+            "keyTerms": ["关键概念1", "关键概念2", ...],
+            "keyParagraphs": [
+                {
+                    "id": "paragraph-1", 
+                    "reason": "这段内容关键的原因"
+                },{
+                    "id": "paragraph-2",
+                    "reason": "这段内容关键的原因"
+                }
+            ]
         }
         
         注意：
         1. summary必选，应简洁清晰，不超过500字
         2. keyTerms可选，1~10个文中最重要的术语或概念(保留文中原始语言和格式，不翻译)
-        3. 所有输出必须严格遵循JSON格式，不要添加额外的文本
+        3. keyParagraphs可选，1~5个文中最重要的段落(保留文中原始语言和格式，不翻译)
+        4. 所有输出必须严格遵循JSON格式，不要添加额外的文本
     `;
     
     // 构建请求内容
@@ -2086,7 +2120,8 @@ async function callAnalyzeContent(content) {
     // 预设的回退响应
     const fallbackResponse = {
         summary: pageSummaryFallback,
-        keyTerms: []
+        keyTerms: [],
+        keyParagraphs: []
     };
     
     // 调用通用API函数
@@ -2110,17 +2145,17 @@ function showAnalysisResults(analysisResult) {
     // 检查分析结果是否存在并有效
     if (!analysisResult) {
         console.error('分析结果为空');
-    } else if (!analysisResult.summary && (!analysisResult.keyTerms || analysisResult.keyTerms.length === 0)) {
+    } else if (!analysisResult.summary) {
         console.error('分析结果不完整:', analysisResult);
     }
     
     // 使用默认值，如果没有提供分析结果
-    const summary = analysisResult?.summary || "这是一篇文章，讨论了未来发展方向。";
+    const summary = analysisResult?.summary || "这篇文章讨论了...";
     
     // 显示分析结果
     const deepreadContent = document.getElementById('deepread-content');
     if (deepreadContent) {
-        // 准备关键术语列表HTML
+        // 准备关键概念列表HTML
         let keyTermsHtml = '';
         if (analysisResult?.keyTerms && analysisResult.keyTerms.length > 0) {
             keyTermsHtml = `
@@ -2135,6 +2170,30 @@ function showAnalysisResults(analysisResult) {
             `;
         }
         
+        // 关键段落HTML
+        let keyParagraphsHtml = '';
+        if (analysisResult?.keyParagraphs && analysisResult.keyParagraphs.length > 0) {
+            keyParagraphsHtml = `<div class="deepread-key-paragraphs"><p><strong>关键段落：</strong></p>`;
+            
+            analysisResult.keyParagraphs.forEach(paragraphInfo => {
+                // 检查是否是新格式（对象包含id和reason）
+                const paragraphId = typeof paragraphInfo === 'object' ? paragraphInfo.id : paragraphInfo;
+                const reason = typeof paragraphInfo === 'object' ? paragraphInfo.reason : '';
+                const paragraph = document.getElementById(paragraphId);
+                if (paragraph) {
+                    keyParagraphsHtml += `
+                        <div class="deepread-key-paragraph" data-target="${paragraphId}">
+                            <p>${paragraph.textContent.length > 120 ? paragraph.textContent.substring(0, 120) + '...' : paragraph.textContent}</p>
+                            <button class="deepread-navigate-btn">跳转到此</button>
+                            <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
+                            ${reason ? `<p class="deepread-paragraph-reason"><strong>关键原因：</strong> ${reason}</p>` : ''}
+                        </div>
+                    `;
+                }
+            });
+            keyParagraphsHtml += '</div>';
+        }
+
         // 将全文分析作为首次概念解析添加到概念历史中
         if (conceptHistory.length === 0) {
             const normalizedUrl = window.cacheManager ? 
@@ -2152,7 +2211,7 @@ function showAnalysisResults(analysisResult) {
                 response: {
                     explanation: `我已完成阅读。${summary}`,
                     relatedConcepts: analysisResult?.keyTerms || [],
-                    relatedParagraphs: []
+                    relatedParagraphs: analysisResult?.keyParagraphs || []
                 }
             });
             console.log('准备缓存全文分析：', conceptHistory[0].conceptKey);
@@ -2182,7 +2241,7 @@ function showAnalysisResults(analysisResult) {
                 <p>我已完成阅读。</p>
                 <p class="deepread-concept-explanation-summary">${summary}</p>
                 ${keyTermsHtml}
-                <p>请浏览文章，选择任意文本并点击出现的DR按钮，我将提供更深入的解读和相关段落导航。</p>
+                ${keyParagraphsHtml}
                 <div id="deepread-concept-explanation-info"></div>
             </div>
             <div class="deepread-vertical-resizer" id="deepread-vertical-resizer"></div>
@@ -2218,21 +2277,66 @@ function showAnalysisResults(analysisResult) {
         
         // 开始处理页面内容，识别关键概念
         identifyKeyConcepts(analysisResult?.keyTerms);
+        
+        // 为相关段落添加跳转按钮事件
+        const navigateButtons = document.querySelectorAll('.deepread-navigate-btn');
+        navigateButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const targetId = this.parentNode.getAttribute('data-target');
+                debugLog('跳转到段落: ' + targetId);
+                
+                const targetElement = document.getElementById(targetId);
+                if (targetElement) {
+                    // 高亮目标段落
+                    document.querySelectorAll('.deepread-highlight').forEach(el => {
+                        el.classList.remove('deepread-highlight');
+                    });
+                    targetElement.classList.add('deepread-highlight');
+                    
+                    // 滚动到目标段落
+                    targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            });
+        });
+        
+        // 为解释相关段落添加跳转按钮事件
+        const explainButtons = document.querySelectorAll('.deepread-explain-btn');
+        explainButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const targetId = this.parentNode.getAttribute('data-target');
+                debugLog('解释段落: ' + targetId);
+                
+                const targetElement = document.getElementById(targetId);
+                if (targetElement) {
+                    // 高亮目标段落
+                    document.querySelectorAll('.deepread-highlight').forEach(el => {
+                        el.classList.remove('deepread-highlight');
+                    });
+                    targetElement.classList.add('deepread-highlight');
+                    
+                    // 滚动到目标段落
+                    targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+                    // 解释该段落
+                    openDeepReadWithConcept(targetElement.textContent);
+                }
+            });
+        });
     }
 }
 
 // showAnalysisResults -> identifyKeyConcepts
 // 识别页面中的关键概念，并添加交互功能，使用户可以点击获取更详细的解释
 function identifyKeyConcepts(llmKeyTerms) {
-    // 使用LLM返回的关键术语，如果没有则使用预设值
+    // 使用LLM返回的关键概念，如果没有则使用预设值
     const keyTerms = llmKeyTerms || [
-        '深度学习', '黑盒', '人机协作'
+        '阅读'
     ];
 
     // 查找页面中的段落
     const paragraphs = document.querySelectorAll('p');
 
-    // 遍历段落，查找关键术语
+    // 遍历段落，查找关键概念
     paragraphs.forEach(p => {
         keyTerms.forEach(term => {
             // 简单的文本替换，实际应用中需要更复杂的NLP
@@ -2478,10 +2582,10 @@ async function callExplanationConcept(conceptName, pageContent = '') {
     // 系统提示词
     const systemPrompt = `
         我是一个专业的深度阅读助手DeepRead，帮助用户进行网页浏览和理解。
-        用户选择了一段文本，我会结合页面内容给出适合语境的中文解释以及相关概念。
-        对于普通页面，我会给出解释和相关概念和段落（方便用户点击并跳转以进一步浏览）。
-        对于视频页，我会基于视频字幕脚本给出解释，但不提供相关概念和段落（视频页无需跳转）。
-        如果页面缺失原始段落编号，我会给出解释和相关概念，但不提供相关段落。
+        用户选择了一段文本'''${conceptName}'''，我会结合页面内容给出适合语境的中文解释以及相关概念。
+        对于常规页面，我会给出解释和相关概念和相关段落（方便用户点击并跳转）。
+        对于视频页，我会基于视频字幕（如有）给出视频内容摘要，但不提供相关概念和相关段落。
+        如果页面缺失原始段落编号，我会解释相关概念，但不提供相关段落。
 
         ---
 
@@ -2648,21 +2752,20 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
     // 相关段落HTML
     let relatedParagraphsHtml = '';
     if (llmResponse.relatedParagraphs && llmResponse.relatedParagraphs.length > 0) {
-        relatedParagraphsHtml = `<div class="deepread-related-paragraphs"><p><strong>文章中的相关段落：</strong></p>`;
+        relatedParagraphsHtml = `<div class="deepread-related-paragraphs"><p><strong>相关段落：</strong></p>`;
         
         llmResponse.relatedParagraphs.forEach(paragraphInfo => {
             // 检查是否是新格式（对象包含id和reason）
             const paragraphId = typeof paragraphInfo === 'object' ? paragraphInfo.id : paragraphInfo;
             const reason = typeof paragraphInfo === 'object' ? paragraphInfo.reason : '';
-            
             const paragraph = document.getElementById(paragraphId);
             if (paragraph) {
                 relatedParagraphsHtml += `
                     <div class="deepread-related-content" data-target="${paragraphId}">
-                        ${reason ? `<p class="deepread-paragraph-reason"><strong>相关原因：</strong> ${reason}</p>` : ''}
+                        <p>${paragraph.textContent.length > 120 ? paragraph.textContent.substring(0, 120) + '...' : paragraph.textContent}</p>
                         <button class="deepread-navigate-btn">跳转到此</button>
                         <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
-                        <p>${paragraph.textContent.length > 120 ? paragraph.textContent.substring(0, 120) + '...' : paragraph.textContent}</p>
+                        ${reason ? `<p class="deepread-paragraph-reason"><strong>相关原因：</strong> ${reason}</p>` : ''}
                     </div>
                 `;
             }
@@ -2779,7 +2882,7 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
         });
     });
     
-    // 为相关段落添加跳转按钮事件
+    // 为解释相关段落添加跳转按钮事件
     const explainButtons = content.querySelectorAll('.deepread-explain-btn');
     explainButtons.forEach(button => {
         button.addEventListener('click', function() {
@@ -3056,13 +3159,11 @@ async function chatWithAI(userMessage, chatHistory = [], pageContent = '', image
     }
 
     // 系统提示词
-    let systemPrompt = `
-        我是一个专业的深度阅读助手DeepRead，帮助用户进行网页浏览和理解。
-        我和用户可能会围绕当前页面对话，也可能穿插讨论多个不同的页面。
-        我将主要参考当前的页面的内容和对话历史，辅以参考记忆，和用户对话。
-        （记忆是基于之前的各种页面的对话历史记录，通过外部工具总结并存取。
-        用向量对比提取topK，因此记忆不一定准确，甚至可能与当前话题无关，我会有选择的参考记忆）
-        我的语言风格将与用户相仿。
+    const systemPrompt = `
+        我是一个专业的深度阅读助手DeepRead，帮助用户进行网页浏览和理解。我的语言风格将与用户相仿。
+        我和用户主要围绕当前页面内容对话，也可能穿插讨论多个不同的页面。
+        我将结合当前的页面内容、正在进行的（多轮）对话，用户记忆（如有），和用户对话。
+        （记忆通过外部存储存取，记忆不一定准确，甚至可能与当前话题无关，我会有选择的参考记忆）
         
         ---
         
