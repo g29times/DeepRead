@@ -18,7 +18,7 @@ console.log('DeepRead content script loaded!');
 const isExtensionEnvironment = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id;
 
 // 'gemini-2.0-flash-preview-image-generation';
-const MODEL_ID = 'gemini-2.5-flash-lite-preview-06-17'
+const MODEL_ID = 'gemini-2.5-flash-lite'
 const greetingMessage = '您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。';
 const pageSummaryFallback = '抱歉，我暂时无法分析页面内容。请稍后再试。';
 const conceptExplanationFallback = '的解释暂时无法获取。请稍后再试。';
@@ -910,7 +910,10 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
                 temperature: 0.7,
                 topP: 0.95,
                 topK: 64,
-                maxOutputTokens: 8192
+                maxOutputTokens: 8192,
+                thinkingConfig: {
+                    thinkingBudget: -1,
+                },
             },
             tools: [
                 {
