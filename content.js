@@ -19,6 +19,8 @@ const isExtensionEnvironment = typeof chrome !== 'undefined' && chrome.runtime &
 
 // 'gemini-2.0-flash-preview-image-generation';
 const MODEL_ID = 'gemini-2.5-flash-lite'
+const PROVIDER = 'google'
+const OPEN_API_KEY = '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'
 const default_bot_language = '中文'
 const greetingMessage = '您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。';
 const pageSummaryFallback = '抱歉，我暂时无法分析页面内容。请稍后再试。';
@@ -790,18 +792,41 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
             }
         }
         
-        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:generateContent?key=${API_KEY}`;
+        // const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:generateContent?key=${API_KEY}`;
+        const API_URL = `https://openrouter.ai/api/v1/chat/completions`;
         
         // 请求配置
+        // const requestBody = {
+        //     contents: contents,
+        //     generationConfig: {
+        //         responseMimeType: 'text/plain',
+        //         temperature: 0.7,
+        //         topP: 0.95,
+        //         topK: 64,
+        //         maxOutputTokens: 8192
+        //     },
+        //     tools: [
+        //         {
+        //             urlContext: {}
+        //         },
+        //         {
+        //             googleSearch: {}
+        //         },
+        //     ],
+        // };
         const requestBody = {
-            contents: contents,
-            generationConfig: {
-                responseMimeType: 'text/plain',
-                temperature: 0.7,
-                topP: 0.95,
-                topK: 64,
-                maxOutputTokens: 8192
-            },
+            model: PROVIDER + '/' + MODEL_ID,
+            messages: contents,
+            // messages: [
+            //     {
+            //       "role": "user",
+            //       "content": "What is the meaning of life?"
+            //     }
+            // ],
+            max_tokens: 8192,
+            temperature: 0.7,
+            top_p: 0.95,
+            top_k: 64,
             tools: [
                 {
                     urlContext: {}
@@ -811,8 +836,7 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
                 },
             ],
         };
-        
-        debugLog(`发送 ${apiType} 请求到 Google Gemini API \n ${API_URL}`);
+        debugLog(`${apiType} 发送请求到API ${API_URL} \n ${JSON.stringify(requestBody, null, 2)}`);
         
         // 创建AbortController来设置超时
         const controller = new AbortController();
@@ -820,10 +844,10 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
         // 发送请求
         let response;
         try {
-            
             response = await fetch(API_URL, {
                 method: 'POST',
                 headers: {
+                    "Authorization": "Bearer " + OPEN_API_KEY,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify(requestBody),
@@ -856,8 +880,11 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
         
         // 解析响应
         const responseData = await response.json();
-        
-        // 使用新的解析函数处理响应
+        debugLog(`${apiType} API响应: \n ${JSON.stringify(responseData, null, 2)}`);
+        // 根据响应结构自动选择解析器：OpenRouter(choices) vs Google(candidates)
+        if (responseData && Array.isArray(responseData.choices)) {
+            return parseOpenRouterResponse(responseData, apiType, expectJson, fallbackResponse);
+        }
         return parseGeminiResponse(responseData, apiType, expectJson, fallbackResponse);
     } catch (error) {
         console.error(`${apiType} 调用出错:`, error);
@@ -1325,6 +1352,76 @@ function parseGeminiResponse(responseData, apiType, expectJson = false, fallback
         }
     } catch (error) {
         console.error(`${apiType} 解析响应时出错:`, error);
+        return expectJson ? fallbackResponse : (typeof fallbackResponse === 'string' ? fallbackResponse : '解析响应时出错');
+    }
+}
+
+/**
+ * 解析 OpenRouter Chat Completions 响应
+ * 典型结构：
+ * {
+ *   id, provider, model, object, created,
+ *   choices: [{ index, finish_reason, message: { role, content } }],
+ *   usage: {...}
+ * }
+ */
+function parseOpenRouterResponse(responseData, apiType, expectJson = false, fallbackResponse = {}) {
+    try {
+        if (!responseData || !Array.isArray(responseData.choices) || !responseData.choices[0]) {
+            throw new Error(`${apiType} OpenRouter 响应格式不符合预期`);
+        }
+        const choice = responseData.choices[0];
+        const message = choice.message || {};
+        const content = typeof message.content === 'string' ? message.content : '';
+        debugLog(`${apiType} OpenRouter 原始文本: ${content}`);
+
+        if (expectJson) {
+            try {
+                // 提取 ```json ... ``` 或 ``` ... ``` 代码块
+                let processedText = content;
+                const jsonCodeBlockRegex = /```(?:json)?\s*([\s\S]*?)```/;
+                const match = processedText.match(jsonCodeBlockRegex);
+                if (match && match[1]) {
+                    debugLog(`${apiType} 检测到Markdown代码块，提取其中JSON`);
+                    processedText = match[1].trim();
+                }
+                // 常见修复
+                processedText = fixCommonJsonErrors(processedText);
+
+                if (processedText && processedText.trim().startsWith('{') && processedText.trim().endsWith('}')) {
+                    try {
+                        return JSON.parse(processedText);
+                    } catch (jsonError) {
+                        console.error(`${apiType} OpenRouter JSON解析错误:`, jsonError, '尝试手动修复');
+                        try {
+                            const manuallyFixedJson = manualJsonFix(processedText);
+                            const jsonObj = JSON.parse(manuallyFixedJson);
+                            debugLog('OpenRouter 使用手动修复方法成功');
+                            return jsonObj;
+                        } catch (fixError) {
+                            console.error('OpenRouter 手动修复失败:', fixError);
+                            // 将原始文本塞到fallback第一个字段，尽量提供信息
+                            const firstKey = Object.keys(fallbackResponse)[0];
+                            if (firstKey) fallbackResponse[firstKey] = content;
+                            return fallbackResponse;
+                        }
+                    }
+                } else {
+                    debugLog(`${apiType} OpenRouter 响应非JSON格式，返回回退对象`);
+                    const firstKey = Object.keys(fallbackResponse)[0];
+                    if (firstKey) fallbackResponse[firstKey] = processedText || content;
+                    return fallbackResponse;
+                }
+            } catch (parseError) {
+                console.error(`${apiType} OpenRouter 解析JSON响应时出错:`, parseError);
+                return fallbackResponse;
+            }
+        } else {
+            // 不需要JSON，直接返回文本
+            return content;
+        }
+    } catch (error) {
+        console.error(`${apiType} OpenRouter 解析响应时出错:`, error);
         return expectJson ? fallbackResponse : (typeof fallbackResponse === 'string' ? fallbackResponse : '解析响应时出错');
     }
 }
@@ -2108,12 +2205,16 @@ async function callAnalyzeContent(content, language) {
     // 构建请求内容
     const contents = [
         {
-            role: 'model',
-            parts: [{ text: systemPrompt }]
+            // role: 'user' | 'assistant' | 'system';
+            role: 'system',
+            // role: 'model',
+            content: systemPrompt
+            // parts: [{ text: systemPrompt }]
         },
         {
             role: 'user',
-            parts: [{ text: '请分析这篇文章的内容并提取关键信息' }]
+            content: '请分析这篇文章的内容并提取关键信息'
+            // parts: [{ text: '请分析这篇文章的内容并提取关键信息' }]
         }
     ];
     
@@ -2174,13 +2275,16 @@ function showAnalysisResults(analysisResult) {
         let keyParagraphsHtml = '';
         if (analysisResult?.keyParagraphs && analysisResult.keyParagraphs.length > 0) {
             keyParagraphsHtml = `<div class="deepread-key-paragraphs"><p><strong>关键段落：</strong></p>`;
-            
+            console.log('analysisResult.keyParagraphs', analysisResult.keyParagraphs);
             analysisResult.keyParagraphs.forEach(paragraphInfo => {
                 // 检查是否是新格式（对象包含id和reason）
                 const paragraphId = typeof paragraphInfo === 'object' ? paragraphInfo.id : paragraphInfo;
                 const reason = typeof paragraphInfo === 'object' ? paragraphInfo.reason : '';
+                console.log('paragraphId', paragraphId);
+                console.log('reason', reason);
                 const paragraph = document.getElementById(paragraphId);
                 if (paragraph) {
+                    console.log('paragraph', paragraph);
                     keyParagraphsHtml += `
                         <div class="deepread-key-paragraph" data-target="${paragraphId}">
                             <p>${paragraph.textContent.length > 120 ? paragraph.textContent.substring(0, 120) + '...' : paragraph.textContent}</p>
@@ -2189,6 +2293,8 @@ function showAnalysisResults(analysisResult) {
                             ${reason ? `<p class="deepread-paragraph-reason"><strong>关键原因：</strong> ${reason}</p>` : ''}
                         </div>
                     `;
+                } else {
+                    console.error('关键段落ID无效:', paragraphInfo);
                 }
             });
             keyParagraphsHtml += '</div>';
@@ -2622,16 +2728,16 @@ async function callExplanationConcept(conceptName, pageContent = '') {
     // 构建请求体
     const contents = [
         {
-            role: 'model',
-            parts: [{ text: systemPrompt }]
+            role: 'system',
+            content: systemPrompt
+            // parts: [{ text: systemPrompt }]
+        },
+        {
+            role: 'user',
+            content: `请解释"${conceptName}"这个概念`
+            // parts: [{ text: `请解释"${conceptName}"这个概念` }]
         }
     ];
-    
-    // 添加用户消息
-    contents.push({
-        role: 'user',
-        parts: [{ text: `请解释"${conceptName}"这个概念` }]
-    });
 
     fallbackResponse = {
         explanation: `"${conceptName}"` + conceptExplanationFallback,
