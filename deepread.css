@@ -2,6 +2,8 @@
 
 /* 定义CSS变量，便于统一管理颜色 */
 :root {
+    --deepread-highlight: rgba(76, 175, 80, 0.2);
+
     --deepread-green: #4CAF50;
     --deepread-green-light: #DCF8C6;
     --deepread-green-dark: green;
@@ -293,6 +295,18 @@
     color: var(--deepread-blue);
 }
 
+/* 统一段落项视觉分隔（关键段落、相关段落共用） */
+.deepread-paragraph-item {
+    border-bottom: 1px dashed var(--deepread-light-gray);
+    padding: 8px 10px;
+    margin: 8px 0;
+    border-radius: 6px;
+}
+
+.deepread-paragraph-item:last-child {
+    border-bottom: none;
+}
+
 /* 跳转到段落按钮 */
 .deepread-navigate-btn {
     background-color: var(--deepread-white);
@@ -517,7 +531,7 @@
 }
 
 /* 高亮样式 */
-.deepread-green-light {
+.deepread-highlight {
     background-color: var(--deepread-green-light);
     border-left: 3px solid var(--deepread-green);
     padding-left: 10px;

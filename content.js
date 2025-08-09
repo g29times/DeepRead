@@ -20,7 +20,7 @@ const isExtensionEnvironment = typeof chrome !== 'undefined' && chrome.runtime &
 // 'gemini-2.0-flash-preview-image-generation';
 const MODEL_ID = 'gemini-2.5-flash-lite'
 const PROVIDER = 'google'
-const OPEN_API_KEY = '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'
+const OPEN_API_KEY = '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'
 const default_bot_language = '中文'
 const greetingMessage = '您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。';
 const pageSummaryFallback = '抱歉，我暂时无法分析页面内容。请稍后再试。';
@@ -1778,7 +1778,7 @@ async function callGeminiDrawAPI(contents, apiType, expectJson = false, fallback
         };
     }
 }
-    
+
 // 1 全文分析 - 支持人工编辑和确认
 function analyzePageContent() {
     debugLog('准备分析全文内容');
@@ -1824,7 +1824,7 @@ function extractPageContent() {
     const paragraphs = [];
     let processedElements = new Set(); // 用于跟踪已处理过的元素，避免重复
     
-    // 处理每个内容区域
+    // 循环处理每个内容区域
     contentAreas.forEach(contentArea => {
         let elements = [];
         
@@ -1911,17 +1911,17 @@ function extractPageContent() {
         content += `[paragraph-${index}] ${text}\n\n`;
     });
     
-    debugLog('第一步：---> 提取页面内容长度: ' + content.length);
+    debugLog('第一步：---> 提取页面内容 长度: ' + content.length);
     
-    // 第二步：显示文本编辑区域
-    showTextEditor(content);
+    // 第二步：预览提取的内容
+    viewTextEditor(content);
 
     return content;
 }
 
-// 1.b 全文分析 显示文本编辑区域（待人工确认）
-function showTextEditor(content) {
-    debugLog('第二步：显示文本编辑区域 待确认分析内容');
+// 1.b 全文分析 预览提取的内容（待确认 可人工编辑）
+function viewTextEditor(content) {
+    debugLog('第二步：预览提取内容 准备分析 长度: ' + content.length);
     
     // 确保面板存在
     if (!document.getElementById('deepread-container')) {
@@ -1950,13 +1950,14 @@ function showTextEditor(content) {
             </div>
         `;
         
-        // 添加确认分析按钮事件
+        // 确认分析按钮事件 关键指向 -> analyzeContent
         const analyzeBtn = document.getElementById('deepread-analyze-btn');
         if (analyzeBtn) {
             analyzeBtn.addEventListener('click', function() {
                 const textInput = document.getElementById('deepread-text-input');
                 if (textInput) {
                     const editedContent = textInput.value;
+                    // 关键指向 -> 分析页面HTML并为段落添加ID
                     analyzeContent(editedContent);
                 }
             });
@@ -1990,7 +1991,7 @@ function showTextEditor(content) {
 
 // 1.c 全文分析 调用LLM API（人工已确认）
 async function analyzeContent(content) {
-    debugLog('第三步：确认分析字数：' + content.length + '，预览: ' + content.substring(0, 100) + '...');
+    debugLog('第三步：确认分析 长度：' + content.length + '，预览: ' + content.substring(0, 100) + '...');
     
     // 显示加载状态
     const deepreadContent = document.getElementById('deepread-content');
@@ -2030,12 +2031,12 @@ async function analyzeContent(content) {
                 debugLog('页面分析状态已更新并保存到缓存');
             }
 
-            // 显示分析结果
+            // 关键指向 -> 为段落添加ID（先添加ID，再渲染结果，确保关键段落可定位）
+            await addParagraphIds();
+            // 显示分析结果（此时ID已就绪）
             showAnalysisResults(llmResponse);
             // 更新页面分析状态
             pageAnalyzed = true;
-            // 为段落添加ID
-            addParagraphIds()
         } else {
             deepreadContent.innerHTML = '<div class="deepread-error">抱歉，分析内容时出错。</div>';
         }
@@ -2082,14 +2083,14 @@ async function addParagraphIds() {
         }
         
         elements.forEach(element => {
-            // 如果元素已经处理过或已有ID，则跳过
-            if (processedElements.has(element) || element.id) {
+            // 如果元素已经处理过则跳过（但不要因为已有id就跳过，我们仍需写入 data 标记并参与计数）
+            if (processedElements.has(element)) {
                 return;
             }
-            
+
             // 标记为已处理
             processedElements.add(element);
-            
+
             // 检查是否在排除区域内
             let shouldExclude = false;
             for (const selector of excludeSelectors) {
@@ -2098,20 +2099,26 @@ async function addParagraphIds() {
                     break;
                 }
             }
-            
+
             // 排除空元素或者只有空格的元素
             const text = element.textContent.trim();
             if (!text || text.length < 5) {
                 shouldExclude = true;
             }
-            
+
             // 排除目录相关元素
             if (element.id && (element.id.includes('toc') || element.name === 'tableOfContents')) {
                 shouldExclude = true;
             }
-            
+
             if (!shouldExclude) {
-                element.id = 'paragraph-' + idCounter;
+                const pid = 'paragraph-' + idCounter;
+                // 始终写入数据标记，便于跨上下文和不改动既有id的情况下定位
+                element.setAttribute('data-dr-paragraph-id', pid);
+                // 仅在没有现有 id 时赋予 id，避免覆盖页面原始结构
+                if (!element.id) {
+                    element.id = pid;
+                }
                 idCounter++;
             }
         });
@@ -2131,7 +2138,6 @@ async function addParagraphIds() {
             if (
                 parentElement &&
                 !processedElements.has(parentElement) &&
-                !parentElement.id &&
                 node.textContent.trim().length >= 8
             ) {
                 // 检查是否在排除区域内
@@ -2145,7 +2151,11 @@ async function addParagraphIds() {
                 
                 if (!shouldExclude) {
                     processedElements.add(parentElement);
-                    parentElement.id = 'paragraph-' + idCounter;
+                    const pid = 'paragraph-' + idCounter;
+                    parentElement.setAttribute('data-dr-paragraph-id', pid);
+                    if (!parentElement.id) {
+                        parentElement.id = pid;
+                    }
                     idCounter++;
                 }
             }
@@ -2169,8 +2179,8 @@ async function callAnalyzeContent(content, language) {
         用户正在查看一个网页，网页的内容形式是文章/资料/视频等，
         我会使用${language}进行总结，但对于有必要提供原文的专业术语等，我会在括号中附上原文。
         对于常规页面，我会给出核心主题/内容摘要和关键概念和关键段落（方便用户点击并跳转）。
-        对于视频页，我会基于视频字幕（如有）给出视频内容摘要，但不提供相关概念和相关段落。
-        如果页面缺失原始段落编号，我会解释相关概念，但不提供相关段落。
+        对于视频页，我会基于视频字幕（如有）给出视频内容摘要，但不提供关键概念和关键段落。
+        如果页面缺失原始段落编号，我会解释关键概念，但不提供关键段落。
 
         ---
         
@@ -2228,7 +2238,7 @@ async function callAnalyzeContent(content, language) {
     // 调用通用API函数
     return await callGeminiAPI(contents, '全文分析', true, fallbackResponse);
 }
-    
+
 // 显示LLM全文分析结果 analyzeContent -> showAnalysisResults
 function showAnalysisResults(analysisResult) {
     // debugLog('全文分析结果:', analysisResult);
@@ -2271,30 +2281,72 @@ function showAnalysisResults(analysisResult) {
             `;
         }
         
-        // 关键段落HTML
+        // 关键段落HTML（方案A+B：跨上下文查找 + 找不到也渲染兜底项）
+        // 简单的跨上下文查找：document -> 同源iframe -> 所有shadowRoot；支持 id 与 data-dr-paragraph-id
+        function findByIdEverywhere(id) {
+            try {
+                const direct = document.getElementById(id);
+                if (direct) return direct;
+                const dataMatch = document.querySelector(`[data-dr-paragraph-id="${CSS.escape(id)}"]`);
+                if (dataMatch) return dataMatch;
+            } catch (e) { /* no-op */ }
+            // 查找同源 iframe
+            const iframes = document.querySelectorAll('iframe');
+            for (const frame of iframes) {
+                try {
+                    const doc = frame.contentDocument || frame.contentWindow?.document;
+                    if (doc) {
+                        const el = doc.getElementById(id) || doc.querySelector(`[data-dr-paragraph-id="${CSS.escape(id)}"]`);
+                        if (el) return el;
+                    }
+                } catch (e) {
+                    // 跨域，忽略
+                }
+            }
+            // 遍历所有含有 shadowRoot 的节点
+            const all = document.querySelectorAll('*');
+            for (const node of all) {
+                if (node.shadowRoot) {
+                    const el = node.shadowRoot.getElementById?.(id) || node.shadowRoot.querySelector?.(`#${CSS.escape(id)}`) || node.shadowRoot.querySelector?.(`[data-dr-paragraph-id="${CSS.escape(id)}"]`);
+                    if (el) return el;
+                }
+            }
+            return null;
+        }
+
         let keyParagraphsHtml = '';
         if (analysisResult?.keyParagraphs && analysisResult.keyParagraphs.length > 0) {
             keyParagraphsHtml = `<div class="deepread-key-paragraphs"><p><strong>关键段落：</strong></p>`;
-            console.log('analysisResult.keyParagraphs', analysisResult.keyParagraphs);
+            // console.log('analysisResult.keyParagraphs', analysisResult.keyParagraphs);
             analysisResult.keyParagraphs.forEach(paragraphInfo => {
                 // 检查是否是新格式（对象包含id和reason）
                 const paragraphId = typeof paragraphInfo === 'object' ? paragraphInfo.id : paragraphInfo;
                 const reason = typeof paragraphInfo === 'object' ? paragraphInfo.reason : '';
-                console.log('paragraphId', paragraphId);
-                console.log('reason', reason);
-                const paragraph = document.getElementById(paragraphId);
+                // console.log('paragraphId', paragraphId);
+                // console.log('reason', reason);
+                const paragraph = findByIdEverywhere(paragraphId);
                 if (paragraph) {
-                    console.log('paragraph', paragraph);
+                    // console.log('paragraph', paragraph);
+                    const preview = paragraph.textContent.trim();
+                    const clipped = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
                     keyParagraphsHtml += `
-                        <div class="deepread-key-paragraph" data-target="${paragraphId}">
-                            <p>${paragraph.textContent.length > 120 ? paragraph.textContent.substring(0, 120) + '...' : paragraph.textContent}</p>
+                        <div class="deepread-key-paragraph deepread-paragraph-item" data-target="${paragraphId}">
+                            <p>${clipped}</p>
                             <button class="deepread-navigate-btn">跳转到此</button>
                             <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
                             ${reason ? `<p class="deepread-paragraph-reason"><strong>关键原因：</strong> ${reason}</p>` : ''}
                         </div>
                     `;
                 } else {
-                    console.error('关键段落ID无效:', paragraphInfo);
+                    console.warn('关键段落ID无效:', paragraphInfo);
+                    // 兜底渲染：展示ID与原因；隐藏“跳转到此”
+                    keyParagraphsHtml += `
+                        <div class="deepread-key-paragraph deepread-paragraph-item" data-target="${paragraphId}">
+                            <p>[段落：${paragraphId}]</p>
+                            <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
+                            ${reason ? `<p class="deepread-paragraph-reason"><strong>关键原因：</strong> ${reason}</p>` : ''}
+                        </div>
+                    `;
                 }
             });
             keyParagraphsHtml += '</div>';
@@ -2384,42 +2436,42 @@ function showAnalysisResults(analysisResult) {
         // 开始处理页面内容，识别关键概念
         identifyKeyConcepts(analysisResult?.keyTerms);
         
-        // 为相关段落添加跳转按钮事件
+        // 为关键段落添加跳转按钮事件
         const navigateButtons = document.querySelectorAll('.deepread-navigate-btn');
         navigateButtons.forEach(button => {
             button.addEventListener('click', function() {
                 const targetId = this.parentNode.getAttribute('data-target');
                 debugLog('跳转到段落: ' + targetId);
-                
-                const targetElement = document.getElementById(targetId);
+
+                const targetElement = (typeof findByIdEverywhere === 'function') ? findByIdEverywhere(targetId) : document.getElementById(targetId);
                 if (targetElement) {
                     // 高亮目标段落
                     document.querySelectorAll('.deepread-highlight').forEach(el => {
                         el.classList.remove('deepread-highlight');
                     });
                     targetElement.classList.add('deepread-highlight');
-                    
+
                     // 滚动到目标段落
                     targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }
             });
         });
         
-        // 为解释相关段落添加跳转按钮事件
+        // 为解释关键段落添加跳转按钮事件
         const explainButtons = document.querySelectorAll('.deepread-explain-btn');
         explainButtons.forEach(button => {
             button.addEventListener('click', function() {
                 const targetId = this.parentNode.getAttribute('data-target');
                 debugLog('解释段落: ' + targetId);
-                
-                const targetElement = document.getElementById(targetId);
+
+                const targetElement = (typeof findByIdEverywhere === 'function') ? findByIdEverywhere(targetId) : document.getElementById(targetId);
                 if (targetElement) {
                     // 高亮目标段落
                     document.querySelectorAll('.deepread-highlight').forEach(el => {
                         el.classList.remove('deepread-highlight');
                     });
                     targetElement.classList.add('deepread-highlight');
-                    
+
                     // 滚动到目标段落
                     targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
@@ -2859,17 +2911,27 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
     let relatedParagraphsHtml = '';
     if (llmResponse.relatedParagraphs && llmResponse.relatedParagraphs.length > 0) {
         relatedParagraphsHtml = `<div class="deepread-related-paragraphs"><p><strong>相关段落：</strong></p>`;
-        
+
         llmResponse.relatedParagraphs.forEach(paragraphInfo => {
-            // 检查是否是新格式（对象包含id和reason）
             const paragraphId = typeof paragraphInfo === 'object' ? paragraphInfo.id : paragraphInfo;
             const reason = typeof paragraphInfo === 'object' ? paragraphInfo.reason : '';
-            const paragraph = document.getElementById(paragraphId);
+            const paragraph = (typeof findByIdEverywhere === 'function') ? findByIdEverywhere(paragraphId) : document.getElementById(paragraphId);
             if (paragraph) {
+                const preview = paragraph.textContent.trim();
+                const clipped = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
                 relatedParagraphsHtml += `
-                    <div class="deepread-related-content" data-target="${paragraphId}">
-                        <p>${paragraph.textContent.length > 120 ? paragraph.textContent.substring(0, 120) + '...' : paragraph.textContent}</p>
+                    <div class="deepread-related-content deepread-paragraph-item" data-target="${paragraphId}">
+                        <p>${clipped}</p>
                         <button class="deepread-navigate-btn">跳转到此</button>
+                        <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
+                        ${reason ? `<p class="deepread-paragraph-reason"><strong>相关原因：</strong> ${reason}</p>` : ''}
+                    </div>
+                `;
+            } else {
+                console.warn('相关段落ID无效:', paragraphInfo);
+                relatedParagraphsHtml += `
+                    <div class="deepread-related-content deepread-paragraph-item" data-target="${paragraphId}">
+                        <p>[段落：${paragraphId}]</p>
                         <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
                         ${reason ? `<p class="deepread-paragraph-reason"><strong>相关原因：</strong> ${reason}</p>` : ''}
                     </div>
