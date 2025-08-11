@@ -20,7 +20,7 @@ const isExtensionEnvironment = typeof chrome !== 'undefined' && chrome.runtime &
 // 'gemini-2.0-flash-preview-image-generation';
 const MODEL_ID = 'gemini-2.5-flash-lite'
 const PROVIDER = 'google'
-const OPEN_API_KEY = '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'
+const OPEN_API_KEY = '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'
 const default_bot_language = '中文'
 const greetingMessage = '您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。';
 const pageSummaryFallback = '抱歉，我暂时无法分析页面内容。请稍后再试。';
@@ -1180,6 +1180,152 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
 }
 
 /**
+ * 调用Gemini多模态API，支持生成图像
+ * @param {Array} contents 请求内容
+ * @param {string} apiType API类型描述（用于日志）
+ * @param {boolean} expectJson 是否期望返回JSON格式
+ * @param {object} fallbackResponse 当请求失败时的默认响应
+ * @returns {object} 包含文本和图像的响应对象
+ */
+async function callGeminiAPIDraw(contents, apiType, expectJson = false, fallbackResponse = {}) {
+    try {
+        // 获取用户设置的API Key
+        let API_KEY = null;
+        // 如果是在扩展环境中，使用Chrome存储API
+        if (isExtensionEnvironment && chrome.storage) {
+            // 由于 chrome.storage.sync.get 是异步的，我们需要将其转换为 Promise
+            API_KEY = await new Promise(resolve => {
+                chrome.storage.sync.get(['deepread_api_key'], function(result) {
+                    resolve(result.deepread_api_key || null);
+                });
+            });
+        } else {
+            // 如果不是在扩展环境中，使用localStorage
+            API_KEY = localStorage.getItem('deepread_api_key');
+        }
+        // 检查API Key是否有效
+        if (!API_KEY) {
+            alert('请先在设置面板中设置您的 API Key，然后刷新页面！');
+            throw new Error('未设置 API Key，请在设置面板中设置您的 Google Gemini API Key');
+        }
+        
+        // 尝试从存储中获取用户配置的MODEL
+        if (isExtensionEnvironment && chrome.storage) {
+            try {
+                // 同步获取存储的MODEL
+                const result = await new Promise(resolve => {
+                    chrome.storage.sync.get(['deepread_model'], resolve);
+                });
+                
+                if (result.deepread_model && result.deepread_model.trim() !== '') {
+                    MODEL_ID = result.deepread_model.trim();
+                    debugLog(`使用用户配置的MODEL: ${MODEL_ID}`);
+                }
+            } catch (error) {
+                console.error('获取用户配置的MODEL失败:', error);
+                // 出错时使用默认MODEL
+            }
+        }
+        
+        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:generateContent?key=${API_KEY}`;
+        
+        // 请求配置 - 注意多模态特有的配置 responseModalities
+        const requestBody = {
+            contents: contents,
+            generationConfig: {
+                temperature: 0.7,
+                topP: 0.95,
+                topK: 64,
+                maxOutputTokens: 8192,
+                responseModalities: ["IMAGE", "TEXT"] // 指定响应包含图像和文本
+            }
+        };
+        
+        debugLog(`发送 ${apiType} 请求到 Google Gemini API \n ${API_URL}`);
+        
+        // 创建AbortController来设置超时
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 300000); // 300秒超时
+        
+        let response;
+        try {
+            // 发送请求
+            response = await fetch(API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestBody),
+                signal: controller.signal // 使用AbortController的signal
+            });
+            
+            // 请求完成后清除超时定时器
+            clearTimeout(timeoutId);
+        } catch (fetchError) {
+            // 清除超时定时器
+            clearTimeout(timeoutId);
+            
+            // 如果是超时错误
+            if (fetchError.name === 'AbortError') {
+                console.error(`${apiType}API请求超时（300秒）`);
+                throw new Error(`API请求超时，请检查网络连接或稍后再试`);
+            }
+            
+            // 其他网络错误
+            console.error(`${apiType}API请求错误：`, fetchError);
+            throw fetchError;
+        }
+        
+        // 检查响应状态
+        if (!response.ok) {
+            const errorData = await response.json();
+            console.error(`${apiType} API请求失败：`, errorData);
+            throw new Error(`API请求失败: ${response.status} ${response.statusText}`);
+        }
+        
+        // 解析响应
+        const responseData = await response.json();
+        
+        // 提取文本和图像响应
+        if (responseData.candidates && responseData.candidates[0] && 
+            responseData.candidates[0].content && responseData.candidates[0].content.parts) {
+            
+            const parts = responseData.candidates[0].content.parts;
+            let result = {
+                text: '',
+                images: []
+            };
+            
+            // 遍历所有响应部分
+            for (const part of parts) {
+                if (part.text) {
+                    // 文本部分
+                    result.text += part.text;
+                } else if (part.inlineData && part.inlineData.mimeType && part.inlineData.mimeType.startsWith('image/')) {
+                    // 图像部分
+                    result.images.push({
+                        mimeType: part.inlineData.mimeType,
+                        data: part.inlineData.data // base64编码的图像数据
+                    });
+                }
+            }
+            
+            // debugLog(`${apiType} 提取到文本和 ${result.images.length} 张图像`);
+            return result;
+        } else {
+            throw new Error(`${apiType} 响应格式不符合预期`);
+        }
+    } catch (error) {
+        console.error(`${apiType} 调用出错:`, error);
+        // 返回预设的回退响应
+        return {
+            text: typeof fallbackResponse === 'string' ? fallbackResponse : imageGenerationFallback,
+            images: []
+        };
+    }
+}
+
+/**
  * 解析Gemini API的响应，处理带有groundingMetadata的搜索结果
  * @param {Object} responseData API返回的原始响应数据
  * @param {string} apiType 调用类型，用于日志记录和错误处理
@@ -1630,152 +1776,6 @@ function processGroundingMetadata(responseText, groundingMetadata) {
     } catch (error) {
         console.error('处理groundingMetadata时出错:', error);
         return responseText; // 出错时返回原始文本
-    }
-}
-
-/**
- * 调用Gemini多模态API，支持生成图像
- * @param {Array} contents 请求内容
- * @param {string} apiType API类型描述（用于日志）
- * @param {boolean} expectJson 是否期望返回JSON格式
- * @param {object} fallbackResponse 当请求失败时的默认响应
- * @returns {object} 包含文本和图像的响应对象
- */
-async function callGeminiDrawAPI(contents, apiType, expectJson = false, fallbackResponse = {}) {
-    try {
-        // 获取用户设置的API Key
-        let API_KEY = null;
-        // 如果是在扩展环境中，使用Chrome存储API
-        if (isExtensionEnvironment && chrome.storage) {
-            // 由于 chrome.storage.sync.get 是异步的，我们需要将其转换为 Promise
-            API_KEY = await new Promise(resolve => {
-                chrome.storage.sync.get(['deepread_api_key'], function(result) {
-                    resolve(result.deepread_api_key || null);
-                });
-            });
-        } else {
-            // 如果不是在扩展环境中，使用localStorage
-            API_KEY = localStorage.getItem('deepread_api_key');
-        }
-        // 检查API Key是否有效
-        if (!API_KEY) {
-            alert('请先在设置面板中设置您的 API Key，然后刷新页面！');
-            throw new Error('未设置 API Key，请在设置面板中设置您的 Google Gemini API Key');
-        }
-        
-        // 尝试从存储中获取用户配置的MODEL
-        if (isExtensionEnvironment && chrome.storage) {
-            try {
-                // 同步获取存储的MODEL
-                const result = await new Promise(resolve => {
-                    chrome.storage.sync.get(['deepread_model'], resolve);
-                });
-                
-                if (result.deepread_model && result.deepread_model.trim() !== '') {
-                    MODEL_ID = result.deepread_model.trim();
-                    debugLog(`使用用户配置的MODEL: ${MODEL_ID}`);
-                }
-            } catch (error) {
-                console.error('获取用户配置的MODEL失败:', error);
-                // 出错时使用默认MODEL
-            }
-        }
-        
-        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:generateContent?key=${API_KEY}`;
-        
-        // 请求配置 - 注意多模态特有的配置 responseModalities
-        const requestBody = {
-            contents: contents,
-            generationConfig: {
-                temperature: 0.7,
-                topP: 0.95,
-                topK: 64,
-                maxOutputTokens: 8192,
-                responseModalities: ["IMAGE", "TEXT"] // 指定响应包含图像和文本
-            }
-        };
-        
-        debugLog(`发送 ${apiType} 请求到 Google Gemini API \n ${API_URL}`);
-        
-        // 创建AbortController来设置超时
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 300000); // 300秒超时
-        
-        let response;
-        try {
-            // 发送请求
-            response = await fetch(API_URL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(requestBody),
-                signal: controller.signal // 使用AbortController的signal
-            });
-            
-            // 请求完成后清除超时定时器
-            clearTimeout(timeoutId);
-        } catch (fetchError) {
-            // 清除超时定时器
-            clearTimeout(timeoutId);
-            
-            // 如果是超时错误
-            if (fetchError.name === 'AbortError') {
-                console.error(`${apiType}API请求超时（300秒）`);
-                throw new Error(`API请求超时，请检查网络连接或稍后再试`);
-            }
-            
-            // 其他网络错误
-            console.error(`${apiType}API请求错误：`, fetchError);
-            throw fetchError;
-        }
-        
-        // 检查响应状态
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error(`${apiType} API请求失败：`, errorData);
-            throw new Error(`API请求失败: ${response.status} ${response.statusText}`);
-        }
-        
-        // 解析响应
-        const responseData = await response.json();
-        
-        // 提取文本和图像响应
-        if (responseData.candidates && responseData.candidates[0] && 
-            responseData.candidates[0].content && responseData.candidates[0].content.parts) {
-            
-            const parts = responseData.candidates[0].content.parts;
-            let result = {
-                text: '',
-                images: []
-            };
-            
-            // 遍历所有响应部分
-            for (const part of parts) {
-                if (part.text) {
-                    // 文本部分
-                    result.text += part.text;
-                } else if (part.inlineData && part.inlineData.mimeType && part.inlineData.mimeType.startsWith('image/')) {
-                    // 图像部分
-                    result.images.push({
-                        mimeType: part.inlineData.mimeType,
-                        data: part.inlineData.data // base64编码的图像数据
-                    });
-                }
-            }
-            
-            // debugLog(`${apiType} 提取到文本和 ${result.images.length} 张图像`);
-            return result;
-        } else {
-            throw new Error(`${apiType} 响应格式不符合预期`);
-        }
-    } catch (error) {
-        console.error(`${apiType} 调用出错:`, error);
-        // 返回预设的回退响应
-        return {
-            text: typeof fallbackResponse === 'string' ? fallbackResponse : imageGenerationFallback,
-            images: []
-        };
     }
 }
 
@@ -3377,7 +3377,7 @@ async function chatWithAI(userMessage, chatHistory = [], pageContent = '', image
     // 调用通用API函数
     // if (totalChars < 32768) {
     //     debugLog('对话总字符数：' + totalChars + '，调用 Gemini Draw API 绘画聊天');
-    //     return await callGeminiDrawAPI(contents, '绘画聊天', false, chatResponseFallback);
+    //     return await callGeminiAPIDraw(contents, '绘画聊天', false, chatResponseFallback);
     // }
     contents.push(...formattedHistory);
 
