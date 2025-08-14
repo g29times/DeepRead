@@ -20,7 +20,7 @@ const isExtensionEnvironment = typeof chrome !== 'undefined' && chrome.runtime &
 // 'gemini-2.0-flash-preview-image-generation';
 const MODEL_ID = 'gemini-2.5-flash-lite'
 const PROVIDER = 'google'
-const OPEN_API_KEY = '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'
+const OPEN_API_KEY = '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'
 const default_bot_language = '中文'
 const greetingMessage = '您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。';
 const pageSummaryFallback = '抱歉，我暂时无法分析页面内容。请稍后再试。';
@@ -2178,8 +2178,8 @@ async function callAnalyzeContent(content, language) {
         我是一个专业的深度阅读助手DeepRead，帮助用户进行网页浏览和理解。
         用户正在查看一个网页，网页的内容形式是文章/资料/视频等，
         我会使用${language}进行总结，但对于有必要提供原文的专业术语等，我会在括号中附上原文。
-        对于常规页面，我会给出核心主题/内容摘要和关键概念和关键段落（方便用户点击并跳转）。
-        对于视频页，我会基于视频字幕（如有）给出视频内容摘要，但不提供关键概念和关键段落。
+        对于常规页面，我会给出全文内容摘要，关键概念和结构化分解的主题及关键段落。
+        对于视频页，我会基于视频字幕（如有）给出视频内容摘要，但不提供关键概念和段落。
         如果页面缺失原始段落编号，我会解释关键概念，但不提供关键段落。
 
         ---
@@ -2197,19 +2197,19 @@ async function callAnalyzeContent(content, language) {
             "keyParagraphs": [
                 {
                     "id": "paragraph-1", 
-                    "reason": "这段内容关键的原因"
+                    "reason": "主题：简短小标题"
                 },{
                     "id": "paragraph-2",
-                    "reason": "这段内容关键的原因"
+                    "reason": "某句话重要的原因"
                 }
             ]
         }
         
         注意：
-        1. summary必选，应简洁清晰，不超过500字
-        2. keyTerms可选，1~10个文中最重要的术语或概念(保留文中原始语言和格式，不翻译)
-        3. keyParagraphs可选，1~5个文中最重要的段落(保留文中原始语言和格式，不翻译)
-        4. 所有输出必须严格遵循JSON格式，不要添加额外的文本
+        1. summary：应简洁清晰，用 5~10 句话总结全文的主题、背景、核心结论。
+        2. keyTerms：5个左右文中的关键词或概念(保留文中原始语言和格式，不翻译)
+        3. keyParagraphs：将全文划分为若干主题部分，为每个主题生成一个小标题，并挑选 1~2 个代表性的原文摘录（句子或段落）。
+        4. 所有输出必须严格遵循JSON格式，不添加额外的格式
     `;
     
     // 构建请求内容
