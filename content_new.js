@@ -20,7 +20,7 @@ const isExtensionEnvironment = typeof chrome !== 'undefined' && chrome.runtime &
 // 'gemini-2.0-flash-preview-image-generation';
 const MODEL_ID = 'gemini-2.5-flash-lite'
 const PROVIDER = 'google'
-const OPEN_API_KEY = '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'
+const OPEN_API_KEY = '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'
 const default_bot_language = '中文'
 const greetingMessage = '您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。';
 const pageSummaryFallback = '抱歉，我暂时无法分析页面内容。请稍后再试。';
@@ -32,14 +32,22 @@ const imageGenerationFallback = '生成图像失败，请稍后再试。';
 let pageAnalyzed = false; // 标记页面是否已经分析过
 // 获取当前页面URL
 const currentUrl = window.location.href;
+
 let pageTitle = document.title;
 let pageContent = ''; // 存储页面内容
 let pageSummary = ''; // 存储页面摘要
 let pageKeyTerms = []; // 存储页面关键概念
 let pageKeyParagraphs = []; // 存储页面关键段落
 
+// Phase 1 功能开关（默认开启，可被页面上的其它脚本覆盖）
+if (!window.DR_FLAGS) window.DR_FLAGS = {};
+if (typeof window.DR_FLAGS.phase1Utils === 'undefined') {
+    window.DR_FLAGS.phase1Utils = true;
+}
+
 // 聊天历史
 let chatHistory = [];
+
 // 概念查询历史
 let conceptHistory = [];
 let currentConceptIndex = -1; // 当前浏览的概念索引
@@ -1187,7 +1195,6 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
  * @param {object} fallbackResponse 当请求失败时的默认响应
  * @returns {object} 包含文本和图像的响应对象
  */
-// @deprecated
 async function callGeminiAPIDraw(contents, apiType, expectJson = false, fallbackResponse = {}) {
     try {
         // 获取用户设置的API Key
@@ -2179,10 +2186,9 @@ async function callAnalyzeContent(content, language) {
         我是一个专业的深度阅读助手DeepRead，帮助用户进行网页浏览和理解。
         用户正在查看一个网页，网页的内容形式是文章/资料/视频等，
         我会使用${language}进行总结，但对于有必要提供原文的专业术语等，我会在括号中附上原文。
-
-        对于常规页面，我会给出核心主题/内容摘要和关键概念和关键段落。
-        对于视频页，我会基于视频字幕（如有）给出视频内容摘要（不提供关键概念和段落）。
-        如果页面缺失段落编号，我会解释关键概念，但不提供关键段落。
+        对于常规页面，我会给出核心主题/内容摘要和关键概念和关键段落（方便用户点击并跳转）。
+        对于视频页，我会基于视频字幕（如有）给出视频内容摘要，但不提供关键概念和关键段落。
+        如果页面缺失原始段落编号，我会解释关键概念，但不提供关键段落。
 
         ---
         
@@ -2198,7 +2204,7 @@ async function callAnalyzeContent(content, language) {
             "keyTerms": ["关键概念1", "关键概念2", ...],
             "keyParagraphs": [
                 {
-                    "id": "paragraph-1",
+                    "id": "paragraph-1", 
                     "reason": "这段内容关键的原因"
                 },{
                     "id": "paragraph-2",
@@ -2237,22 +2243,25 @@ async function callAnalyzeContent(content, language) {
         keyParagraphs: []
     };
     
-    // 调用通用API函数
-    return await callGeminiAPI(contents, '全文分析', true, fallbackResponse);
+    // TODO: 实现实际的API调用。当前先返回回退结果以保持兼容。
+    return fallbackResponse;
 }
 
-// 显示LLM全文分析结果 analyzeContent -> showAnalysisResults
 function showAnalysisResults(analysisResult) {
     // debugLog('全文分析结果:', analysisResult);
     
     // 确保面板存在并可见
-    if (!document.getElementById('deepread-container')) {
-        createDeepReadPanel();
-    }
-    
-    const panel = document.getElementById('deepread-container');
-    if (panel) {
-        panel.classList.remove('deepread-hidden');
+    if (window.DR_FLAGS && window.DR_FLAGS.phase1Utils && typeof ensurePanelVisible === 'function') {
+        ensurePanelVisible();
+    } else {
+        if (!document.getElementById('deepread-container')) {
+            createDeepReadPanel();
+        }
+        
+        const panel = document.getElementById('deepread-container');
+        if (panel) {
+            panel.classList.remove('deepread-hidden');
+        }
     }
     
     // 检查分析结果是否存在并有效
@@ -2276,7 +2285,7 @@ function showAnalysisResults(analysisResult) {
                     <h4>相关概念</h4>
                     <ul>
                         ${analysisResult.keyTerms.map(term => 
-                            `<li><a href="#" class="deepread-concept" data-concept="${term}">${term}</a></li>`
+                            `<li><a href="#" class="deepread-related-concept" data-concept="${term}">${term}</a></li>`
                         ).join('')}
                     </ul>
                 </div>
@@ -2285,73 +2294,50 @@ function showAnalysisResults(analysisResult) {
         
         // 关键段落HTML（方案A+B：跨上下文查找 + 找不到也渲染兜底项）
         // 简单的跨上下文查找：document -> 同源iframe -> 所有shadowRoot；支持 id 与 data-dr-paragraph-id
-        function findByIdEverywhere(id) {
-            try {
-                const direct = document.getElementById(id);
-                if (direct) return direct;
-                const dataMatch = document.querySelector(`[data-dr-paragraph-id="${CSS.escape(id)}"]`);
-                if (dataMatch) return dataMatch;
-            } catch (e) { /* no-op */ }
-            // 查找同源 iframe
-            const iframes = document.querySelectorAll('iframe');
-            for (const frame of iframes) {
-                try {
-                    const doc = frame.contentDocument || frame.contentWindow?.document;
-                    if (doc) {
-                        const el = doc.getElementById(id) || doc.querySelector(`[data-dr-paragraph-id="${CSS.escape(id)}"]`);
-                        if (el) return el;
-                    }
-                } catch (e) {
-                    // 跨域，忽略
-                }
-            }
-            // 遍历所有含有 shadowRoot 的节点
-            const all = document.querySelectorAll('*');
-            for (const node of all) {
-                if (node.shadowRoot) {
-                    const el = node.shadowRoot.getElementById?.(id) || node.shadowRoot.querySelector?.(`#${CSS.escape(id)}`) || node.shadowRoot.querySelector?.(`[data-dr-paragraph-id="${CSS.escape(id)}"]`);
-                    if (el) return el;
-                }
-            }
-            return null;
-        }
 
         let keyParagraphsHtml = '';
         if (analysisResult?.keyParagraphs && analysisResult.keyParagraphs.length > 0) {
-            keyParagraphsHtml = `<div class="deepread-key-paragraphs"><p><strong>关键段落：</strong></p>`;
-            // console.log('analysisResult.keyParagraphs', analysisResult.keyParagraphs);
-            analysisResult.keyParagraphs.forEach(paragraphInfo => {
-                // 检查是否是新格式（对象包含id和reason）
-                const paragraphId = typeof paragraphInfo === 'object' ? paragraphInfo.id : paragraphInfo;
-                const reason = typeof paragraphInfo === 'object' ? paragraphInfo.reason : '';
-                // console.log('paragraphId', paragraphId);
-                // console.log('reason', reason);
-                const paragraph = findByIdEverywhere(paragraphId);
-                if (paragraph) {
-                    // console.log('paragraph', paragraph);
-                    const preview = paragraph.textContent.trim();
-                    const clipped = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
-                    keyParagraphsHtml += `
-                        <div class="deepread-key-paragraph deepread-paragraph-item" data-target="${paragraphId}">
-                            <p>${clipped}</p>
-                            <button class="deepread-navigate-btn">跳转到此</button>
-                            <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
-                            ${reason ? `<p class="deepread-paragraph-reason"><strong>关键原因：</strong> ${reason}</p>` : ''}
-                        </div>
-                    `;
-                } else {
-                    console.warn('关键段落ID无效:', paragraphInfo);
-                    // 兜底渲染：展示ID与原因；隐藏“跳转到此”
-                    keyParagraphsHtml += `
-                        <div class="deepread-key-paragraph deepread-paragraph-item" data-target="${paragraphId}">
-                            <p>[段落：${paragraphId}]</p>
-                            <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
-                            ${reason ? `<p class="deepread-paragraph-reason"><strong>关键原因：</strong> ${reason}</p>` : ''}
-                        </div>
-                    `;
+            if (window.DR_FLAGS && window.DR_FLAGS.phase1Utils) {
+                const itemsHtml = buildParagraphItems(analysisResult.keyParagraphs);
+                if (itemsHtml) {
+                    keyParagraphsHtml = `<div class="deepread-key-paragraphs"><p><strong>关键段落：</strong></p>${itemsHtml}</div>`;
                 }
-            });
-            keyParagraphsHtml += '</div>';
+            } else {
+                keyParagraphsHtml = `<div class="deepread-key-paragraphs"><p><strong>关键段落：</strong></p>`;
+                // console.log('analysisResult.keyParagraphs', analysisResult.keyParagraphs);
+                analysisResult.keyParagraphs.forEach(paragraphInfo => {
+                    // 检查是否是新格式（对象包含id和reason）
+                    const paragraphId = typeof paragraphInfo === 'object' ? paragraphInfo.id : paragraphInfo;
+                    const reason = typeof paragraphInfo === 'object' ? paragraphInfo.reason : '';
+                    // console.log('paragraphId', paragraphId);
+                    // console.log('reason', reason);
+                    const paragraph = findByIdEverywhere(paragraphId);
+                    if (paragraph) {
+                        // console.log('paragraph', paragraph);
+                        const preview = paragraph.textContent.trim();
+                        const clipped = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
+                        keyParagraphsHtml += `
+                            <div class="deepread-key-paragraph deepread-paragraph-item" data-target="${paragraphId}">
+                                <p>${clipped}</p>
+                                <button class="deepread-navigate-btn">跳转到此</button>
+                                <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
+                                ${reason ? `<p class="deepread-paragraph-reason"><strong>关键原因：</strong> ${reason}</p>` : ''}
+                            </div>
+                        `;
+                    } else {
+                        console.warn('关键段落ID无效:', paragraphInfo);
+                        // 兜底渲染：展示ID与原因；隐藏“跳转到此”
+                        keyParagraphsHtml += `
+                            <div class="deepread-key-paragraph deepread-paragraph-item" data-target="${paragraphId}">
+                                <p>[段落：${paragraphId}]</p>
+                                <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
+                                ${reason ? `<p class="deepread-paragraph-reason"><strong>关键原因：</strong> ${reason}</p>` : ''}
+                            </div>
+                        `;
+                    }
+                });
+                keyParagraphsHtml += '</div>';
+            }
         }
 
         // 将全文分析作为首次概念解析添加到概念历史中
@@ -2438,55 +2424,51 @@ function showAnalysisResults(analysisResult) {
         // 开始处理页面内容，识别关键概念
         identifyKeyConcepts(analysisResult?.keyTerms);
         
+        // 为概念列表绑定点击事件（Phase 1 使用委托 + 回退）
+        if (window.DR_FLAGS && window.DR_FLAGS.phase1Utils) {
+            bindRelatedConcepts(deepreadContent);
+        } else {
+            const relatedConcepts = deepreadContent.querySelectorAll('.deepread-related-concept');
+            relatedConcepts.forEach(a => {
+                a.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const name = this.getAttribute('data-concept');
+                    if (name && typeof openDeepReadWithConcept === 'function') {
+                        debugLog('相关概念: ' + name);
+                        openDeepReadWithConcept(name);
+                    }
+                });
+            });
+        }
+
         // 为关键段落添加跳转按钮事件
-        const navigateButtons = document.querySelectorAll('.deepread-navigate-btn');
-        navigateButtons.forEach(button => {
-            button.addEventListener('click', function() {
-                const targetId = this.parentNode.getAttribute('data-target');
-                debugLog('跳转到段落: ' + targetId);
+        if (window.DR_FLAGS && window.DR_FLAGS.phase1Utils) {
+            const listContainer = deepreadContent.querySelector('.deepread-key-paragraphs');
+            if (listContainer) bindParagraphListEvents(listContainer);
+        } else {
+            const navigateButtons = document.querySelectorAll('.deepread-navigate-btn');
+            navigateButtons.forEach(button => {
+                button.addEventListener('click', function() {
+                    const targetId = this.parentNode.getAttribute('data-target');
+                    debugLog('跳转到段落: ' + targetId);
 
-                const targetElement = (typeof findByIdEverywhere === 'function') ? findByIdEverywhere(targetId) : document.getElementById(targetId);
-                if (targetElement) {
-                    // 高亮目标段落
-                    document.querySelectorAll('.deepread-highlight').forEach(el => {
-                        el.classList.remove('deepread-highlight');
-                    });
-                    targetElement.classList.add('deepread-highlight');
+                    const targetElement = (typeof findByIdEverywhere === 'function') ? findByIdEverywhere(targetId) : document.getElementById(targetId);
+                    if (targetElement) {
+                        // 高亮目标段落
+                        document.querySelectorAll('.deepread-highlight').forEach(el => {
+                            el.classList.remove('deepread-highlight');
+                        });
+                        targetElement.classList.add('deepread-highlight');
 
-                    // 滚动到目标段落
-                    targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                }
+                        // 滚动到目标段落
+                        targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+                });
             });
-        });
-        
-        // 为解释关键段落添加跳转按钮事件
-        const explainButtons = document.querySelectorAll('.deepread-explain-btn');
-        explainButtons.forEach(button => {
-            button.addEventListener('click', function() {
-                const targetId = this.parentNode.getAttribute('data-target');
-                debugLog('解释段落: ' + targetId);
-
-                const targetElement = (typeof findByIdEverywhere === 'function') ? findByIdEverywhere(targetId) : document.getElementById(targetId);
-                if (targetElement) {
-                    // 高亮目标段落
-                    document.querySelectorAll('.deepread-highlight').forEach(el => {
-                        el.classList.remove('deepread-highlight');
-                    });
-                    targetElement.classList.add('deepread-highlight');
-
-                    // 滚动到目标段落
-                    targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-                    // 解释该段落
-                    openDeepReadWithConcept(targetElement.textContent);
-                }
-            });
-        });
+        }
     }
 }
 
-// showAnalysisResults -> identifyKeyConcepts
-// 识别页面中的关键概念，并添加交互功能，使用户可以点击获取更详细的解释
 function identifyKeyConcepts(llmKeyTerms) {
     // 使用LLM返回的关键概念，如果没有则使用预设值
     const keyTerms = llmKeyTerms || [
@@ -2808,79 +2790,258 @@ function processLLMExplanation(llmResponse, conceptName) {
     try {
         // 如果返回的是字符串，尝试解析为JSON
         let response = typeof llmResponse === 'string' ? JSON.parse(llmResponse) : llmResponse;
-        
+
         // 安全处理文本内容，防止XSS攻击
         const sanitizeText = (text) => {
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
         };
-        
-        // 处理解释内容
+
+        // 解释内容
         const explanation = sanitizeText(response.explanation || `关于"${conceptName}"的解释未找到`);
-        
-        // 处理相关概念
-        const relatedConcepts = Array.isArray(response.relatedConcepts) ? 
-            response.relatedConcepts.map(concept => sanitizeText(concept)) : [];
-        
-        // 处理相关段落
+
+        // 相关概念
+        const relatedConcepts = Array.isArray(response.relatedConcepts)
+            ? response.relatedConcepts.map(concept => sanitizeText(concept))
+            : [];
+
+        // 相关段落（尽量补充可读文本）
         const relatedParagraphs = [];
         if (Array.isArray(response.relatedParagraphs)) {
             response.relatedParagraphs.forEach(item => {
-                // 如果是简单字符串格式
-                if (typeof item === 'string') {
-                    const paragraph = document.getElementById(item);
-                    if (paragraph) {
-                        relatedParagraphs.push({
-                            id: item,
-                            text: paragraph.textContent,
-                            reason: "相关段落"
-                        });
-                    }
-                } 
-                // 如果是对象格式
-                else if (typeof item === 'object' && item.id) {
-                    const paragraph = document.getElementById(item.id);
-                    if (paragraph) {
-                        relatedParagraphs.push({
-                            id: item.id,
-                            text: paragraph.textContent,
-                            reason: sanitizeText(item.reason || "相关段落")
-                        });
-                    }
+                const paraId = typeof item === 'object' ? item.id : item;
+                const reason = typeof item === 'object' ? item.reason : '相关段落';
+                if (!paraId) return;
+                const paragraph = document.getElementById(paraId);
+                if (paragraph) {
+                    relatedParagraphs.push({
+                        id: paraId,
+                        text: paragraph.textContent,
+                        reason: sanitizeText(reason || '相关段落')
+                    });
+                } else {
+                    // 即便找不到DOM，也保留id与原因，方便后续渲染统一逻辑
+                    relatedParagraphs.push({
+                        id: paraId,
+                        text: '',
+                        reason: sanitizeText(reason || '相关段落')
+                    });
                 }
             });
         }
-        
+
+        return { explanation, relatedConcepts, relatedParagraphs };
+    } catch (err) {
+        console.error('处理 LLM 解释响应失败:', err);
         return {
-            explanation,
-            relatedConcepts,
-            relatedParagraphs
-        };
-    } catch (error) {
-        console.error("处理LLM解释结果时出错:", error);
-        return {
-            explanation: `解析"${conceptName}"的解释时出错。`,
+            explanation: `"${conceptName}"` + conceptExplanationFallback,
             relatedConcepts: [],
             relatedParagraphs: []
         };
     }
 }
 
+// 在整个页面、同源 iframe 与 shadow DOM 中查找元素（Phase 1 工具）
+function findByIdEverywhere(idOrElement) {
+    if (!idOrElement) return null;
+    // 直接传入元素的场景
+    if (typeof idOrElement === 'object' && idOrElement.nodeType === 1) return idOrElement;
+
+    const id = String(idOrElement);
+    const seenDocs = new Set();
+
+    const safeEscape = (s) => (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&');
+
+    function byIdOrData(root, pid) {
+        if (!root) return null;
+        const direct = root.getElementById ? root.getElementById(pid) : null;
+        if (direct) return direct;
+        try {
+            return root.querySelector ? root.querySelector(`[data-dr-paragraph-id="${safeEscape(pid)}"]`) : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function scanNodeShadow(root, pid) {
+        if (!root) return null;
+        const direct = byIdOrData(root, pid);
+        if (direct) return direct;
+        const all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+        for (const node of all) {
+            if (node && node.shadowRoot) {
+                const srEl = byIdOrData(node.shadowRoot, pid) || scanNodeShadow(node.shadowRoot, pid);
+                if (srEl) return srEl;
+            }
+        }
+        return null;
+    }
+
+    function scanDocument(doc, pid) {
+        if (!doc || seenDocs.has(doc)) return null;
+        seenDocs.add(doc);
+
+        const direct = byIdOrData(doc, pid);
+        if (direct) return direct;
+
+        // 扫描 shadow roots
+        const all = doc.querySelectorAll ? doc.querySelectorAll('*') : [];
+        for (const node of all) {
+            if (node && node.shadowRoot) {
+                const srEl = byIdOrData(node.shadowRoot, pid) || scanNodeShadow(node.shadowRoot, pid);
+                if (srEl) return srEl;
+            }
+        }
+
+        // 扫描同源 iframes
+        const iframes = doc.querySelectorAll ? doc.querySelectorAll('iframe') : [];
+        for (const frame of iframes) {
+            try {
+                const fdoc = frame.contentDocument || frame.contentWindow?.document;
+                const found = scanDocument(fdoc, pid);
+                if (found) return found;
+            } catch (_) { /* 跨域忽略 */ }
+        }
+        return null;
+    }
+
+    return scanDocument(document, id);
+}
+
+// 确保 DeepRead 面板存在并可见（Phase 1 工具）
+function ensurePanelVisible() {
+    if (!document.getElementById('deepread-container')) {
+        createDeepReadPanel();
+    }
+    const panel = document.getElementById('deepread-container');
+    if (panel) {
+        panel.classList.remove('deepread-hidden');
+    }
+    return panel;
+}
+
+// 高亮并滚动到元素
+function highlightAndScrollTo(el, opts = {}) {
+    if (!el) return;
+    const {
+        highlightClass = 'deepread-highlight',
+        behavior = 'smooth',
+        block = 'center',
+        durationMs = 2000,
+    } = opts;
+
+    try {
+        // 清除旧高亮
+        document.querySelectorAll(`.${highlightClass}`).forEach(x => x.classList.remove(highlightClass));
+    } catch (_) {}
+    el.classList.add(highlightClass);
+    try {
+        el.scrollIntoView({ behavior, block });
+    } catch (_) {
+        el.scrollIntoView();
+    }
+    if (durationMs > 0) {
+        setTimeout(() => {
+            try { el.classList.remove(highlightClass); } catch (_) {}
+        }, durationMs);
+    }
+}
+
+// 构建统一的段落项目 HTML（仅项目，不含容器标题）
+function buildParagraphItems(items) {
+    if (!Array.isArray(items) || items.length === 0) return '';
+    const html = [];
+    for (const paragraphInfo of items) {
+        const paragraphId = typeof paragraphInfo === 'object' ? paragraphInfo.id : paragraphInfo;
+        const reason = typeof paragraphInfo === 'object' ? (paragraphInfo.reason || '') : '';
+        if (!paragraphId) continue;
+        const targetEl = (typeof findByIdEverywhere === 'function') ? findByIdEverywhere(paragraphId) : document.getElementById(paragraphId);
+        if (targetEl) {
+            const preview = (targetEl.textContent || '').trim();
+            const clipped = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
+            html.push(
+                `<div class="deepread-related-content deepread-paragraph-item" data-target="${paragraphId}">`
+              + `  <p>${clipped}</p>`
+              + `  <button class="deepread-navigate-btn">跳转到此</button>`
+              + `  <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>`
+              + (reason ? `<p class="deepread-paragraph-reason"><strong>相关原因：</strong> ${reason}</p>` : '')
+              + `</div>`
+            );
+        } else {
+            html.push(
+                `<div class="deepread-related-content deepread-paragraph-item" data-target="${paragraphId}">`
+              + `  <p>[段落：${paragraphId}]</p>`
+              + `  <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>`
+              + (reason ? `<p class="deepread-paragraph-reason"><strong>相关原因：</strong> ${reason}</p>` : '')
+              + `</div>`
+            );
+        }
+    }
+    return html.join('');
+}
+
+// 统一的段落列表事件绑定（委托 + 幂等）
+function bindParagraphListEvents(container) {
+    if (!container || container.dataset.drParagraphEventsBound === '1') return;
+    container.dataset.drParagraphEventsBound = '1';
+
+    container.addEventListener('click', (e) => {
+        const navBtn = e.target.closest('.deepread-navigate-btn');
+        if (!navBtn) return;
+        const item = e.target.closest('.deepread-paragraph-item');
+        if (!item) return;
+        const targetId = item.getAttribute('data-target');
+        const targetEl = findByIdEverywhere ? findByIdEverywhere(targetId) : document.getElementById(targetId);
+        if (!targetEl) return;
+
+        if (e.target.classList.contains('deepread-explain-btn')) {
+            highlightAndScrollTo(targetEl);
+            // 使用整段文本进行概念解释
+            if (typeof openDeepReadWithConcept === 'function') {
+                openDeepReadWithConcept(targetEl.textContent);
+            }
+        } else {
+            highlightAndScrollTo(targetEl);
+        }
+    });
+}
+
+// 统一的相关概念事件绑定（委托 + 幂等）
+function bindRelatedConcepts(scopeEl) {
+    const scope = scopeEl || document;
+    if (!scope || scope.dataset?.drRelatedConceptsBound === '1') return;
+    if (!scope.dataset) scope.dataset = {};
+    scope.dataset.drRelatedConceptsBound = '1';
+
+    scope.addEventListener('click', (e) => {
+        const a = e.target.closest('.deepread-related-concept');
+        if (!a || !scope.contains(a)) return;
+        e.preventDefault();
+        const name = a.getAttribute('data-concept');
+        if (name && typeof openDeepReadWithConcept === 'function') {
+            debugLog('相关概念: ' + name);
+            openDeepReadWithConcept(name);
+        }
+    });
+}
+
+// ================= 以上为 Phase 1 工具 =================
+
 // 更新解释区域
 function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey) {
     const content = document.getElementById('deepread-content');
     if (!content) return;
-    
+
     // 生成用于显示的概念名称
     // const displayName = displayName || getConceptDisplayName(conceptName);
     // const conceptKey = conceptKey || getConceptKey(conceptName);
-    
+
     debugLog('更新解释区域:');
     // debugLog('- 原始概念名称:' + conceptName);
     debugLog('- 显示名称:' + displayName);
     debugLog('- 概念键:' + conceptKey);
-    
+
     // 防止llmResponse为undefined
     if (!llmResponse) {
         console.error('更新解释区域时llmResponse为undefined');
@@ -2890,10 +3051,10 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
             relatedParagraphs: []
         };
     }
-    
+
     // 获取对话区元素
     const chatSection = content.querySelector('.deepread-chat-section');
-    
+
     // 相关概念HTML
     let relatedConceptsHtml = '';
     if (llmResponse.relatedConcepts && llmResponse.relatedConcepts.length > 0) {
@@ -2908,41 +3069,47 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
             </div>
         `;
     }
-    
-    // 相关段落HTML
+
+    // 相关段落HTML（Phase 1 统一构建 + 回退）
     let relatedParagraphsHtml = '';
     if (llmResponse.relatedParagraphs && llmResponse.relatedParagraphs.length > 0) {
-        relatedParagraphsHtml = `<div class="deepread-related-paragraphs"><p><strong>相关段落：</strong></p>`;
-
-        llmResponse.relatedParagraphs.forEach(paragraphInfo => {
-            const paragraphId = typeof paragraphInfo === 'object' ? paragraphInfo.id : paragraphInfo;
-            const reason = typeof paragraphInfo === 'object' ? paragraphInfo.reason : '';
-            const paragraph = (typeof findByIdEverywhere === 'function') ? findByIdEverywhere(paragraphId) : document.getElementById(paragraphId);
-            if (paragraph) {
-                const preview = paragraph.textContent.trim();
-                const clipped = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
-                relatedParagraphsHtml += `
-                    <div class="deepread-related-content deepread-paragraph-item" data-target="${paragraphId}">
-                        <p>${clipped}</p>
-                        <button class="deepread-navigate-btn">跳转到此</button>
-                        <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
-                        ${reason ? `<p class="deepread-paragraph-reason"><strong>相关原因：</strong> ${reason}</p>` : ''}
-                    </div>
-                `;
-            } else {
-                console.warn('相关段落ID无效:', paragraphInfo);
-                relatedParagraphsHtml += `
-                    <div class="deepread-related-content deepread-paragraph-item" data-target="${paragraphId}">
-                        <p>[段落：${paragraphId}]</p>
-                        <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
-                        ${reason ? `<p class="deepread-paragraph-reason"><strong>相关原因：</strong> ${reason}</p>` : ''}
-                    </div>
-                `;
+        if (window.DR_FLAGS && window.DR_FLAGS.phase1Utils) {
+            const itemsHtml = buildParagraphItems(llmResponse.relatedParagraphs);
+            if (itemsHtml) {
+                relatedParagraphsHtml = `<div class="deepread-related-paragraphs"><p><strong>相关段落：</strong></p>${itemsHtml}</div>`;
             }
-        });
-        relatedParagraphsHtml += '</div>';
+        } else {
+            relatedParagraphsHtml = `<div class="deepread-related-paragraphs"><p><strong>相关段落：</strong></p>`;
+            llmResponse.relatedParagraphs.forEach(paragraphInfo => {
+                const paragraphId = typeof paragraphInfo === 'object' ? paragraphInfo.id : paragraphInfo;
+                const reason = typeof paragraphInfo === 'object' ? paragraphInfo.reason : '';
+                const paragraph = (typeof findByIdEverywhere === 'function') ? findByIdEverywhere(paragraphId) : document.getElementById(paragraphId);
+                if (paragraph) {
+                    const preview = paragraph.textContent.trim();
+                    const clipped = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
+                    relatedParagraphsHtml += `
+                        <div class="deepread-related-content deepread-paragraph-item" data-target="${paragraphId}">
+                            <p>${clipped}</p>
+                            <button class="deepread-navigate-btn">跳转到此</button>
+                            <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
+                            ${reason ? `<p class="deepread-paragraph-reason"><strong>相关原因：</strong> ${reason}</p>` : ''}
+                        </div>
+                    `;
+                } else {
+                    console.warn('相关段落ID无效:', paragraphInfo);
+                    relatedParagraphsHtml += `
+                        <div class="deepread-related-content deepread-paragraph-item" data-target="${paragraphId}">
+                            <p>[段落：${paragraphId}]</p>
+                            <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
+                            ${reason ? `<p class="deepread-paragraph-reason"><strong>相关原因：</strong> ${reason}</p>` : ''}
+                        </div>
+                    `;
+                }
+            });
+            relatedParagraphsHtml += '</div>';
+        }
     }
-    
+
     // 更新解释区内容，如果已经有对话区，只更新解释部分
     if (chatSection) {
         const explanationDiv = content.querySelector('.deepread-explanation-section');
@@ -2950,7 +3117,7 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
             // 创建概念导航按钮
             const prevDisabled = currentConceptIndex <= 0;
             const nextDisabled = currentConceptIndex >= conceptHistory.length - 1;
-            
+
             explanationDiv.innerHTML = `
                 <div class="deepread-section-header">
                     <h3>概念解释区</h3>
@@ -2959,7 +3126,7 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
                         <button class="deepread-insert-chat-btn" id="deepread-insert-chat" title="将概念解释加入对话">插入对话</button>
                         <button class="deepread-delete-concept-btn" id="deepread-delete-concept" title="删除当前概念">删除概念</button>
                     </div>
-					<div class="deepread-concept-nav">
+                    <div class="deepread-concept-nav">
                         <button class="deepread-concept-nav-btn" id="deepread-prev-concept" ${prevDisabled ? 'disabled' : ''}>←</button>
                         <button class="deepread-concept-nav-btn" id="deepread-next-concept" ${nextDisabled ? 'disabled' : ''}>→</button>
                     </div>
@@ -3020,61 +3187,70 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
     // 初始化聊天相关的事件监听
     initChatEvents();
     
-    // 为相关概念添加点击事件
-    const relatedConcepts = content.querySelectorAll('.deepread-related-concept');
-    relatedConcepts.forEach(concept => {
-        concept.addEventListener('click', function(e) {
-            e.preventDefault();
-            const relatedConceptName = this.getAttribute('data-concept');
-            debugLog('相关概念: ' + relatedConceptName);
-            openDeepReadWithConcept(relatedConceptName);
+    // 为相关概念添加事件（Phase 1 使用委托 + 回退）
+    if (window.DR_FLAGS && window.DR_FLAGS.phase1Utils) {
+        bindRelatedConcepts(content);
+    } else {
+        const relatedConcepts = content.querySelectorAll('.deepread-related-concept');
+        relatedConcepts.forEach(concept => {
+            concept.addEventListener('click', function(e) {
+                e.preventDefault();
+                const relatedConceptName = this.getAttribute('data-concept');
+                debugLog('相关概念: ' + relatedConceptName);
+                openDeepReadWithConcept(relatedConceptName);
+            });
         });
-    });
-    
-    // 为相关段落添加跳转按钮事件
-    const navigateButtons = content.querySelectorAll('.deepread-navigate-btn');
-    navigateButtons.forEach(button => {
-        button.addEventListener('click', function() {
-            const targetId = this.parentNode.getAttribute('data-target');
-            debugLog('跳转到段落: ' + targetId);
-            
-            const targetElement = document.getElementById(targetId);
-            if (targetElement) {
-                // 高亮目标段落
-                document.querySelectorAll('.deepread-highlight').forEach(el => {
-                    el.classList.remove('deepread-highlight');
-                });
-                targetElement.classList.add('deepread-highlight');
-                
-                // 滚动到目标段落
-                targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
-        });
-    });
-    
-    // 为解释相关段落添加跳转按钮事件
-    const explainButtons = content.querySelectorAll('.deepread-explain-btn');
-    explainButtons.forEach(button => {
-        button.addEventListener('click', function() {
-            const targetId = this.parentNode.getAttribute('data-target');
-            debugLog('解释段落: ' + targetId);
-            
-            const targetElement = document.getElementById(targetId);
-            if (targetElement) {
-                // 高亮目标段落
-                document.querySelectorAll('.deepread-highlight').forEach(el => {
-                    el.classList.remove('deepread-highlight');
-                });
-                targetElement.classList.add('deepread-highlight');
-                
-                // 滚动到目标段落
-                targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
 
-                // 解释该段落
-                openDeepReadWithConcept(targetElement.textContent);
-            }
+    // 为相关段落绑定事件（Phase 1 使用统一委托 + 回退）
+    if (window.DR_FLAGS && window.DR_FLAGS.phase1Utils) {
+        const listContainer = content.querySelector('.deepread-related-paragraphs');
+        if (listContainer) bindParagraphListEvents(listContainer);
+    } else {
+        // 旧的逐按钮绑定逻辑
+        const navigateButtons = content.querySelectorAll('.deepread-navigate-btn');
+        navigateButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const targetId = this.parentNode.getAttribute('data-target');
+                debugLog('跳转到段落: ' + targetId);
+                
+                const targetElement = document.getElementById(targetId);
+                if (targetElement) {
+                    // 高亮目标段落
+                    document.querySelectorAll('.deepread-highlight').forEach(el => {
+                        el.classList.remove('deepread-highlight');
+                    });
+                    targetElement.classList.add('deepread-highlight');
+                    
+                    // 滚动到目标段落
+                    targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            });
         });
-    });
+        
+        const explainButtons = content.querySelectorAll('.deepread-explain-btn');
+        explainButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const targetId = this.parentNode.getAttribute('data-target');
+                debugLog('解释段落: ' + targetId);
+                
+                const targetElement = document.getElementById(targetId);
+                if (targetElement) {
+                    // 高亮目标段落
+                    document.querySelectorAll('.deepread-highlight').forEach(el => {
+                        el.classList.remove('deepread-highlight');
+                    });
+                    targetElement.classList.add('deepread-highlight');
+                    
+                    // 滚动到目标段落
+                    targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+                    // 解释该段落
+                    openDeepReadWithConcept(targetElement.textContent);
+                }
+            });
+        });
+    }
     
     // 调用概念区事件初始化函数
     initConceptEvents();
@@ -3408,13 +3584,13 @@ async function chatWithAI(userMessage, chatHistory = [], pageContent = '', image
     // debugLog("构建的最终请求内容:" + JSON.stringify(contents, null, 2));
 
     // 6. 根据有无图片，智能选择并调用API
-    if (images && images.length < 0) { // callGeminiAPIDraw 停用 如需启用 代码改为 images.length > 0
-        // 有图片，调用多模态，非流式API
-        // debugLog('对话总字符数：' + totalChars + "，调用多模态API (callGeminiAPIDraw)");
-        // return await callGeminiAPIDraw(contents, '多模态聊天', false, chatResponseFallback);
-    } else if (totalChars > 0) {
-        // 调用流式响应API
-        debugLog('对话总字符数：' + totalChars + "，调用流式响应API (callGeminiAPIStream)");
+    if (images && images.length > 0) {
+        // 有图片，调用多模态API，仍然使用非流式API
+        debugLog('对话总字符数：' + totalChars + "，调用多模态API (callGeminiAPI)");
+        return await callGeminiAPI(contents, '多模态聊天', false, chatResponseFallback);
+    } else {
+        // 没有图片，调用流式文本API
+        debugLog('对话总字符数：' + totalChars + "，调用流式文本API (callGeminiAPIStream)");
         
         // 返回一个Promise，在流式响应完成时解析
         return new Promise((resolve, reject) => {
