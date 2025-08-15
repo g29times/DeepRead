@@ -20,7 +20,7 @@ const isExtensionEnvironment = typeof chrome !== 'undefined' && chrome.runtime &
 // 'gemini-2.0-flash-preview-image-generation';
 const MODEL_ID = 'gemini-2.5-flash-lite'
 const PROVIDER = 'google'
-const OPEN_API_KEY = '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'
+const OPEN_API_KEY = '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'
 const default_bot_language = '中文'
 const greetingMessage = '您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。';
 const pageSummaryFallback = '抱歉，我暂时无法分析页面内容。请稍后再试。';
@@ -290,7 +290,7 @@ function createDeepReadPanel() {
     header.className = 'deepread-header';
     
     const title = document.createElement('h2');
-    title.textContent = 'DeepRead 深度阅读助手';
+    title.textContent = 'DeepRead 深度阅读';
     
     const closeBtn = document.createElement('button');
     closeBtn.className = 'deepread-close-btn';
@@ -1520,7 +1520,7 @@ function parseOpenRouterResponse(responseData, apiType, expectJson = false, fall
         const choice = responseData.choices[0];
         const message = choice.message || {};
         const content = typeof message.content === 'string' ? message.content : '';
-        debugLog(`${apiType} OpenRouter 原始文本: ${content}`);
+        debugLog(`${apiType} OpenRouter 原始响应: ${content}`);
 
         if (expectJson) {
             try {
@@ -1833,11 +1833,30 @@ function extractPageContent() {
         if (contentArea.tagName && ['H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(contentArea.tagName)) {
             elements = [contentArea];
         } else {
-            // 获取所有段落、标题和列表项，针对特殊格式添加span元素
-            elements = contentArea.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, span[style*="font-size"]');
+            // 获取所有段落、标题、列表项、代码块和特殊格式元素
+            elements = contentArea.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, pre, code, blockquote, span[style*="font-size"], div[class*="highlight"], div[class*="hljs"], div[class*="prism"], pre[class*="language-"], code[class*="language-"], [class*="code-block"], [class*="blob-code"]');
         }
         
         elements.forEach(element => {
+            // 避免父子元素重复：如果是code且在pre内，跳过code元素
+            if (element.tagName === 'CODE' && element.closest('pre')) {
+                return;
+            }
+            
+            // 避免祖先已处理的情况：检查是否有祖先元素已被处理
+            let hasProcessedAncestor = false;
+            let parent = element.parentElement;
+            while (parent && parent !== contentArea) {
+                if (processedElements.has(parent)) {
+                    hasProcessedAncestor = true;
+                    break;
+                }
+                parent = parent.parentElement;
+            }
+            if (hasProcessedAncestor) {
+                return;
+            }
+            
             // 如果元素已经处理过，则跳过
             if (processedElements.has(element)) {
                 return;
@@ -2079,11 +2098,30 @@ async function addParagraphIds() {
         if (contentArea.tagName && ['H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(contentArea.tagName)) {
             elements = [contentArea];
         } else {
-            // 获取所有段落、标题和列表项，针对特殊格式添加span元素
-            elements = contentArea.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, span[style*="font-size"]');
+            // 获取所有段落、标题、列表项、代码块和特殊格式元素
+            elements = contentArea.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, pre, code, blockquote, span[style*="font-size"], div[class*="highlight"], div[class*="hljs"], div[class*="prism"], pre[class*="language-"], code[class*="language-"], [class*="code-block"], [class*="blob-code"]');
         }
         
         elements.forEach(element => {
+            // 避免父子元素重复：如果是code且在pre内，跳过code元素
+            if (element.tagName === 'CODE' && element.closest('pre')) {
+                return;
+            }
+            
+            // 避免祖先已处理的情况：检查是否有祖先元素已被处理
+            let hasProcessedAncestor = false;
+            let parent = element.parentElement;
+            while (parent && parent !== contentArea) {
+                if (processedElements.has(parent)) {
+                    hasProcessedAncestor = true;
+                    break;
+                }
+                parent = parent.parentElement;
+            }
+            if (hasProcessedAncestor) {
+                return;
+            }
+            
             // 如果元素已经处理过则跳过（但不要因为已有id就跳过，我们仍需写入 data 标记并参与计数）
             if (processedElements.has(element)) {
                 return;
@@ -2176,29 +2214,27 @@ async function callAnalyzeContent(content, language) {
     
     // 系统提示词
     const systemPrompt = `
+        ## 角色：
         我是一个专业的深度阅读助手DeepRead，帮助用户进行网页浏览和理解。
         用户正在查看一个网页，网页的内容形式是文章/资料/视频等，
-        我会使用${language}进行总结，但对于有必要提供原文的专业术语等，我会在括号中附上原文。
-
-        对于常规页面，我会给出全文内容摘要，关键概念和关键段落。其结构是：
-            1. 全文内容摘要
-            2. [关键概念]
-            3. [章节
-                - [章节主题/小标题]
-                - [关键段落1]
-                - [关键段落2]
-            ]
-        对于视频页，我会基于视频字幕（如有）给出视频内容摘要，但不提供关键概念和段落。
-        如果页面缺失原始段落编号，我会解释关键概念，但不提供关键段落。
-
+        
         ---
         
-        网页内容：'''
+        ## 网页内容：
+        '''
         ${content}
         '''
         
         ---
         
+        ## 任务：
+        我会使用${language}进行总结，但对于有必要提供原文的专业术语等，我会在括号中附上原文。
+
+        对于常规页面，我会给出全文内容摘要，关键概念和关键段落。
+        对于视频页，我会基于视频字幕（如有）给出视频内容摘要，但不提供关键概念和段落。
+        如果页面缺失原始段落编号，我会解释关键概念，但不提供关键段落。
+
+        ## 输出格式：
         我会按以下JSON格式返回结果：
         {
             "summary": "内容摘要，简要描述网页的主题和要点",
@@ -2206,19 +2242,43 @@ async function callAnalyzeContent(content, language) {
             "keyParagraphs": [
                 {
                     "id": "paragraph-1", 
-                    "reason": "章节主题：简短小标题"
+                    "reason": "章节主题 --- 段落标题 --- 关键信息一句话概述..."
                 },{
                     "id": "paragraph-2",
-                    "reason": "这段内容关键的原因"
+                    "reason": "章节主题 --- 段落标题 --- 关键信息一句话概述..."
+                }
+            ]
+        }
+
+        例子：
+        {
+            "summary": "《2025年AI现状》报告揭示了AI的变革性影响，通过“超新星”和“流星”重新定义了成功标准。报告描绘了新兴AI生态系统，并预测了浏览器代理、生成式视频、关键评估、新社交媒体及并购趋势。创始人应关注可持续增长和战略性护城河。",
+            "keyTerms": ["超新星 (Supernovas)", "流星 (Shooting Stars)"],
+            "keyParagraphs": [
+                {
+                    "id": "paragraph-10", 
+                    "reason": "重新定义成功 --- AI超新星 --- 增长速度惊人，商业化第一年平均达到4000万美元ARR，第二年达1.25亿美元。"
+                },{
+                    "id": "paragraph-11", 
+                    "reason": "重新定义成功 --- AI超新星 --- 毛利率低（平均25%），但每全职员工年经常性收入（ARR/FTE）高达113万美元，效率极高。"
+                },{
+                    "id": "paragraph-12",
+                    "reason": "重新定义成功 --- AI流星 --- 增长模式更像优秀SaaS公司，第一年ARR约300万美元，年同比增长四倍。"
+                },{
+                    "id": "paragraph-18",
+                    "reason": "新兴AI生态系统（AI星系） --- AI基础设施 --- 少数巨头（OpenAI、Anthropic）主导基础模型，并进行垂直整合。"
+                },{
+                    "id": "paragraph-19",
+                    "reason": "新兴AI生态系统（AI星系） --- 消费级AI --- 从生产力工具转向治疗、陪伴和自我成长等更深层用例。"
                 }
             ]
         }
         
         注意：
-        1. summary：应简洁清晰，用 5~10 句话总结全文的主题、背景、核心结论。
-        2. keyTerms：5个左右文中的关键词或概念(保留文中原始语言和格式，不翻译)
-        3. keyParagraphs：将全文按不同主题划分为若干章节，每个章节挑选 1~2 个代表性的句子或段落。
-        4. 所有输出必须严格遵循JSON格式，不添加额外的格式
+        1. summary：应简洁清晰，用 3~5 句话总结全文的主题、背景、核心结论。
+        2. keyTerms：5个左右 文中的关键词或概念。(保留文中原始语言和格式，可在括号内翻译)
+        3. keyParagraphs：将全文划分为若干章节，每个章节分为多个段落，每个段落提取 1~2 个关键信息。
+        4. 所有输出必须严格遵循上述JSON格式。
     `;
     
     // 构建请求内容
@@ -2336,14 +2396,14 @@ function showAnalysisResults(analysisResult) {
                 const paragraph = findByIdEverywhere(paragraphId);
                 if (paragraph) {
                     // console.log('paragraph', paragraph);
-                    const preview = paragraph.textContent.trim();
-                    const clipped = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
+                    // const preview = paragraph.textContent.trim();
+                    // const clipped = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
+                    // <p>${clipped}</p>
                     keyParagraphsHtml += `
                         <div class="deepread-key-paragraph deepread-paragraph-item" data-target="${paragraphId}">
-                            <p>${clipped}</p>
+                            ${reason ? `<p class="deepread-paragraph-reason"><strong>${reason}</strong></p>` : ''}
                             <button class="deepread-navigate-btn">跳转到此</button>
                             <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
-                            ${reason ? `<p class="deepread-paragraph-reason"><strong>关键原因：</strong> ${reason}</p>` : ''}
                         </div>
                     `;
                 } else {
@@ -2351,9 +2411,8 @@ function showAnalysisResults(analysisResult) {
                     // 兜底渲染：展示ID与原因；隐藏“跳转到此”
                     keyParagraphsHtml += `
                         <div class="deepread-key-paragraph deepread-paragraph-item" data-target="${paragraphId}">
-                            <p>[段落：${paragraphId}]</p>
+                            ${reason ? `<p class="deepread-paragraph-reason"><strong>${reason}</strong></p>` : ''}
                             <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
-                            ${reason ? `<p class="deepread-paragraph-reason"><strong>关键原因：</strong> ${reason}</p>` : ''}
                         </div>
                     `;
                 }
@@ -2376,7 +2435,7 @@ function showAnalysisResults(analysisResult) {
                 displayName: '全文分析', // 显示名称保持不变
                 conceptKey: getConceptKey(pageSpecificFullTextName), // 生成概念键
                 response: {
-                    explanation: `我已完成阅读。${summary}`,
+                    explanation: `${summary}`,
                     relatedConcepts: analysisResult?.keyTerms || [],
                     relatedParagraphs: analysisResult?.keyParagraphs || []
                 }
@@ -2405,7 +2464,6 @@ function showAnalysisResults(analysisResult) {
                 <div class="deepread-concept-header">
                     <h3 class="deepread-concept-title" data-concept-key="${currentConcept.conceptKey || ''}">${displayName}</h3>
                 </div>
-                <p>我已完成阅读。</p>
                 <p class="deepread-concept-explanation-summary">${summary}</p>
                 ${keyTermsHtml}
                 ${keyParagraphsHtml}
@@ -2926,23 +2984,21 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
             const reason = typeof paragraphInfo === 'object' ? paragraphInfo.reason : '';
             const paragraph = (typeof findByIdEverywhere === 'function') ? findByIdEverywhere(paragraphId) : document.getElementById(paragraphId);
             if (paragraph) {
-                const preview = paragraph.textContent.trim();
-                const clipped = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
+                // const preview = paragraph.textContent.trim();
+                // const clipped = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
                 relatedParagraphsHtml += `
                     <div class="deepread-related-content deepread-paragraph-item" data-target="${paragraphId}">
-                        <p>${clipped}</p>
+                        ${reason ? `<p class="deepread-paragraph-reason"><strong>${reason}</strong></p>` : ''}
                         <button class="deepread-navigate-btn">跳转到此</button>
                         <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
-                        ${reason ? `<p class="deepread-paragraph-reason"><strong>相关原因：</strong> ${reason}</p>` : ''}
                     </div>
                 `;
             } else {
                 console.warn('相关段落ID无效:', paragraphInfo);
                 relatedParagraphsHtml += `
                     <div class="deepread-related-content deepread-paragraph-item" data-target="${paragraphId}">
-                        <p>[段落：${paragraphId}]</p>
+                        ${reason ? `<p class="deepread-paragraph-reason"><strong>${reason}</strong></p>` : ''}
                         <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
-                        ${reason ? `<p class="deepread-paragraph-reason"><strong>相关原因：</strong> ${reason}</p>` : ''}
                     </div>
                 `;
             }
