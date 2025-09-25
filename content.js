@@ -20,7 +20,7 @@ const isExtensionEnvironment = typeof chrome !== 'undefined' && chrome.runtime &
 // 'gemini-2.0-flash-preview-image-generation';
 const MODEL_ID = 'gemini-2.5-flash-lite'
 const PROVIDER = 'google'
-const OPEN_API_KEY = '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'
+const OPEN_API_KEY = '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'
 const default_bot_language = '中文'
 const greetingMessage = '您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。';
 const pageSummaryFallback = '抱歉，我暂时无法分析页面内容。请稍后再试。';
