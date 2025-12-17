@@ -20,7 +20,6 @@ const isExtensionEnvironment = typeof chrome !== 'undefined' && chrome.runtime &
 // 'gemini-2.0-flash-preview-image-generation';
 const MODEL_ID = 'gemini-2.5-flash-lite'
 const PROVIDER = 'google'
-const OPEN_API_KEY = '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'
 const default_bot_language = '中文'
 const greetingMessage = '您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。';
 const pageSummaryFallback = '抱歉，我暂时无法分析页面内容。请稍后再试。';
@@ -862,7 +861,7 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
             response = await fetch(API_URL, {
                 method: 'POST',
                 headers: {
-                    "Authorization": "Bearer " + OPEN_API_KEY,
+                    "Authorization": "Bearer " + API_KEY,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify(requestBody),
