@@ -20,7 +20,7 @@ const isExtensionEnvironment = typeof chrome !== 'undefined' && chrome.runtime &
 // 'gemini-2.0-flash-preview-image-generation';
 const MODEL_ID = 'gemini-2.5-flash-lite'
 const PROVIDER = 'google'
-const OPEN_API_KEY = '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'
+const OPEN_API_KEY = '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'
 const default_bot_language = '中文'
 const greetingMessage = '您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。';
 const pageSummaryFallback = '抱歉，我暂时无法分析页面内容。请稍后再试。';
@@ -720,12 +720,27 @@ function addTextSelectionListener() {
             floatButton.style.left = (event.pageX + 10) + 'px';
             floatButton.style.top = (event.pageY + 10) + 'px';
             
+            // 阻止mousedown和mouseup事件冒泡，防止触发document的mouseup重新定位按钮
+            floatButton.addEventListener('mousedown', function(e) {
+                e.stopPropagation();
+                e.preventDefault();
+            });
+            
+            floatButton.addEventListener('mouseup', function(e) {
+                e.stopPropagation();
+                e.preventDefault();
+            });
+            
             // 添加点击事件
-            floatButton.addEventListener('click', function() {
+            floatButton.addEventListener('click', function(e) {
+                e.stopPropagation();
+                e.preventDefault();
                 debugLog('点击了浮动按钮，选中文本: ' + selectedText);
                 
                 // 移除浮动按钮
-                document.body.removeChild(floatButton);
+                if (document.body.contains(floatButton)) {
+                    document.body.removeChild(floatButton);
+                }
                 
                 // 打开阅读助手并跳转到相应词条
                 openDeepReadWithConcept(selectedText);
@@ -2230,9 +2245,12 @@ async function callAnalyzeContent(content, language) {
         ## 任务：
         我会使用${language}进行总结，但对于有必要提供原文的专业术语等，我会在括号中附上原文。
 
-        对于常规页面，我会给出全文内容摘要，关键概念和关键段落。
-        对于视频页，我会基于视频字幕（如有）给出视频内容摘要，但不提供关键概念和段落。
-        如果页面缺失原始段落编号，我会解释关键概念，但不提供关键段落。
+        对于常规页面，
+            给出全文内容摘要summary，并挑选出关键概念keyTerms和关键段落keyParagraphs（对应段落id）。
+            如果页面内容没有提供段落编号，则不提供关键段落keyParagraphs。
+        对于视频页，
+            如果有视频字幕，给出视频内容摘要summary和keyTerms，但不提供关键段落keyParagraphs。
+            如果没有视频字幕，给出视频标题summary，但不提供keyTerms和keyParagraphs。
 
         ## 输出格式：
         我会按以下JSON格式返回结果：
@@ -2242,10 +2260,10 @@ async function callAnalyzeContent(content, language) {
             "keyParagraphs": [
                 {
                     "id": "paragraph-1", 
-                    "reason": "章节主题 --- 段落标题 --- 关键信息一句话概述..."
+                    "reason": "段落主题 --- 关键信息一句话概述..."
                 },{
                     "id": "paragraph-2",
-                    "reason": "章节主题 --- 段落标题 --- 关键信息一句话概述..."
+                    "reason": "段落主题 --- 关键信息一句话概述..."
                 }
             ]
         }
@@ -2257,27 +2275,18 @@ async function callAnalyzeContent(content, language) {
             "keyParagraphs": [
                 {
                     "id": "paragraph-10", 
-                    "reason": "重新定义成功 --- AI超新星 --- 增长速度惊人，商业化第一年平均达到4000万美元ARR，第二年达1.25亿美元。"
-                },{
-                    "id": "paragraph-11", 
-                    "reason": "重新定义成功 --- AI超新星 --- 毛利率低（平均25%），但每全职员工年经常性收入（ARR/FTE）高达113万美元，效率极高。"
-                },{
-                    "id": "paragraph-12",
-                    "reason": "重新定义成功 --- AI流星 --- 增长模式更像优秀SaaS公司，第一年ARR约300万美元，年同比增长四倍。"
-                },{
-                    "id": "paragraph-18",
-                    "reason": "新兴AI生态系统（AI星系） --- AI基础设施 --- 少数巨头（OpenAI、Anthropic）主导基础模型，并进行垂直整合。"
+                    "reason": "超新星 --- AI超新星增长速度惊人，商业化第一年平均达到4000万美元ARR，第二年达1.25亿美元。"
                 },{
                     "id": "paragraph-19",
-                    "reason": "新兴AI生态系统（AI星系） --- 消费级AI --- 从生产力工具转向治疗、陪伴和自我成长等更深层用例。"
+                    "reason": "流星 --- 消费级新兴AI生态系统是从生产力工具转向治疗、陪伴和自我成长的更深层用例。"
                 }
             ]
         }
         
         注意：
         1. summary：应简洁清晰，用 3~5 句话总结全文的主题、背景、核心结论。
-        2. keyTerms：5个左右 文中的关键词或概念。(保留文中原始语言和格式，可在括号内翻译)
-        3. keyParagraphs：将全文划分为若干章节，每个章节分为多个段落，每个段落提取 1~2 个关键信息。
+        2. keyTerms：5个左右 文中的关键词或概念。(保留文中原始语言和格式，必要时可在括号内翻译)
+        3. keyParagraphs：将全文划分为若干个段落，找出关键段落，并用一句话概扩。
         4. 所有输出必须严格遵循上述JSON格式。
     `;
     
@@ -2727,10 +2736,21 @@ async function explainConcept(conceptName, element) {
                 // 如果不存在，调用LLM API获取概念解释
                 debugLog(`概念"${displayName}"不在缓存中，调用LLM获取解释`);
                 const conceptInfo = await callExplanationConcept(conceptName, pageContent);
-                // 如果调用失败，显示错误
+                // 如果调用失败，显示错误和重试按钮
                 if (!conceptInfo) {
                     console.error('获取概念解释失败:', conceptName);
-                    explanationDiv.innerHTML = `<div class="deepread-error">获取"${displayName}"的解释失败。请稍后再试。</div>`;
+                    explanationDiv.innerHTML = `
+                        <div class="deepread-error">
+                            获取"${displayName}"的解释失败。请稍后再试。
+                            <button class="deepread-retry-btn" data-concept="${conceptName}" data-display="${displayName}">重试</button>
+                        </div>`;
+                    // 绑定重试按钮事件
+                    const retryBtn = explanationDiv.querySelector('.deepread-retry-btn');
+                    if (retryBtn) {
+                        retryBtn.addEventListener('click', function() {
+                            explainConcept(conceptName, null);
+                        });
+                    }
                     return;
                 }
                 // 处理返回的数据
@@ -2788,10 +2808,21 @@ async function explainConcept(conceptName, element) {
             }
         } catch (error) {
             console.error('解释概念时出错:', error);
-            // 出错时显示错误信息
+            // 出错时显示错误信息和重试按钮
             const explanationDiv = document.getElementById('deepread-concept-explanation-info');
             if (explanationDiv) {
-                explanationDiv.innerHTML = `<div class="deepread-error">获取"${displayName}"的解释时出错。请稍后再试。</div>`;
+                explanationDiv.innerHTML = `
+                    <div class="deepread-error">
+                        获取"${displayName}"的解释时出错。请稍后再试。
+                        <button class="deepread-retry-btn" data-concept="${conceptName}" data-display="${displayName}">重试</button>
+                    </div>`;
+                // 绑定重试按钮事件
+                const retryBtn = explanationDiv.querySelector('.deepread-retry-btn');
+                if (retryBtn) {
+                    retryBtn.addEventListener('click', function() {
+                        explainConcept(conceptName, null);
+                    });
+                }
             }
         }
     });
@@ -2956,6 +2987,12 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
         };
     }
     
+    // 检测是否是fallback响应，如果是则添加重试按钮
+    const isFallbackResponse = llmResponse.explanation && 
+        llmResponse.explanation.includes(conceptExplanationFallback);
+    const retryButtonHtml = isFallbackResponse ? 
+        `<button class="deepread-retry-btn" data-concept="${conceptName}" data-display="${displayName}">重试</button>` : '';
+    
     // 获取对话区元素
     const chatSection = content.querySelector('.deepread-chat-section');
     
@@ -3030,7 +3067,7 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
                 <div class="deepread-concept-header">
                     <h3 class="deepread-concept-title" data-concept-key="${conceptKey}">${displayName}</h3>
                 </div>
-                <p class="deepread-concept-explanation-summary">${llmResponse.explanation}</p>
+                <p class="deepread-concept-explanation-summary">${llmResponse.explanation}${retryButtonHtml}</p>
                 ${relatedConceptsHtml}
                 ${relatedParagraphsHtml}
             `;
@@ -3041,7 +3078,7 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
             explanationSection.className = 'deepread-explanation-section';
             explanationSection.innerHTML = `
                 <h3 data-concept-key="${conceptKey}">${displayName}</h3>
-                <p>${llmResponse.explanation}</p>
+                <p>${llmResponse.explanation}${retryButtonHtml}</p>
                 ${relatedConceptsHtml}
                 ${relatedParagraphsHtml}
             `;
@@ -3053,7 +3090,7 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
         content.innerHTML = `
             <div class="deepread-explanation-section">
                 <h3 data-concept-key="${conceptKey}">${displayName}</h3>
-                <p>${llmResponse.explanation}</p>
+                <p>${llmResponse.explanation}${retryButtonHtml}</p>
                 ${relatedConceptsHtml}
                 ${relatedParagraphsHtml}
             </div>
@@ -3141,6 +3178,17 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
     
     // 调用概念区事件初始化函数
     initConceptEvents();
+    
+    // 为重试按钮添加点击事件
+    const retryButtons = content.querySelectorAll('.deepread-retry-btn');
+    retryButtons.forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.preventDefault();
+            const conceptToRetry = this.getAttribute('data-concept');
+            debugLog('重试获取概念解释: ' + conceptToRetry);
+            explainConcept(conceptToRetry, null);
+        });
+    });
     
     // 添加概念导航按钮事件
     const prevButton = document.getElementById('deepread-prev-concept');

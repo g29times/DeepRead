@@ -420,6 +420,32 @@
     color: var(--deepread-red);
 }
 
+/* 重试按钮 */
+.deepread-retry-btn {
+    background-color: var(--deepread-green);
+    color: var(--deepread-white);
+    border: none;
+    padding: 6px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    margin-left: 10px;
+    transition: background-color 0.2s;
+}
+
+.deepread-retry-btn:hover {
+    background-color: var(--deepread-green-dark);
+}
+
+/* 错误信息样式 */
+.deepread-error {
+    color: var(--deepread-red);
+    padding: 10px;
+    margin: 10px 0;
+    border-radius: 4px;
+    background-color: var(--deepread-pink);
+}
+
 /* 概念导航按钮 */
 .deepread-concept-nav-btn {
     background-color: var(--deepread-white);
