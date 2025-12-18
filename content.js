@@ -416,7 +416,7 @@ function createDeepReadPanel() {
     // 添加事件监听
     document.getElementById('deepread-analyze-btn').addEventListener('click', analyzePageContent);
     
-    // // 点击主面板外部区域时隐藏面板
+    // // 点击主面板外部区域时隐藏面板 
     // document.addEventListener('click', function(e) {
     //     const mainContainer = document.getElementById('deepread-container');
     //     if (mainContainer && !mainContainer.classList.contains('deepread-hidden')) {
