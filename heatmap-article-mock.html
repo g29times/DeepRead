@@ -1,0 +1,804 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DeepRead 金句热力（文章内联 Mock）</title>
+  <style>
+    :root{
+      --bg: #0b1020;
+      --panel: rgba(255,255,255,0.06);
+      --panel2: rgba(255,255,255,0.08);
+      --text: rgba(255,255,255,0.92);
+      --muted: rgba(255,255,255,0.65);
+      --grid: rgba(255,255,255,0.10);
+      --accent: #7c5cff;
+      --good: #2dd4bf;
+      --warn: #f59e0b;
+      --shadow: 0 12px 40px rgba(0,0,0,0.40);
+      --radius: 14px;
+      --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+
+      --hl-bg: rgba(124, 92, 255, 0.18);
+      --hl-bg-weak: rgba(124, 92, 255, 0.10);
+      --hl-border: rgba(124, 92, 255, 0.65);
+      --hl-border-weak: rgba(124, 92, 255, 0.30);
+
+      --bar-bg: rgba(255,255,255,0.08);
+    }
+
+    *{ box-sizing: border-box; }
+
+    body{
+      margin: 0;
+      font-family: var(--font);
+      color: var(--text);
+      background:
+        radial-gradient(1200px 900px at 20% 10%, rgba(124, 92, 255, 0.22), transparent 55%),
+        radial-gradient(900px 700px at 90% 30%, rgba(45, 212, 191, 0.18), transparent 55%),
+        radial-gradient(700px 700px at 50% 100%, rgba(239, 68, 68, 0.10), transparent 60%),
+        var(--bg);
+      min-height: 100vh;
+    }
+
+    .wrap{
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 18px;
+    }
+
+    .header{
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+
+    .title{
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    h1{
+      font-size: 18px;
+      line-height: 1.2;
+      margin: 0;
+      letter-spacing: 0.2px;
+    }
+
+    .subtitle{
+      font-size: 12px;
+      color: var(--muted);
+      margin: 0;
+      line-height: 1.45;
+      max-width: 860px;
+    }
+
+    .toolbar{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    button{
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.07);
+      color: var(--text);
+      padding: 8px 10px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: transform .05s ease, background .12s ease, border-color .12s ease;
+      user-select: none;
+    }
+    button:hover{ background: rgba(255,255,255,0.10); border-color: rgba(255,255,255,0.24); }
+    button:active{ transform: translateY(1px); }
+
+    .layout{
+      display: grid;
+      grid-template-columns: 62px 1fr 360px;
+      gap: 12px;
+      align-items: start;
+    }
+
+    .card{
+      background: var(--panel);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .card-head{
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.03);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .card-head .label{
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* Left mini-map */
+    .minimap{
+      position: sticky;
+      top: 12px;
+      height: calc(100vh - 24px);
+      padding: 10px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 10px;
+    }
+
+    .minimap .cap{
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .minimap-bar{
+      position: relative;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(0,0,0,0.18);
+      overflow: hidden;
+    }
+
+    .minimap-rail{
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+    }
+
+    .minimap-dot{
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      height: 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(124, 92, 255, 0.18);
+      cursor: pointer;
+      transition: transform .08s ease, background .12s ease, border-color .12s ease, box-shadow .12s ease;
+    }
+
+    .minimap-dot:hover{ transform: scaleX(1.05); }
+
+    .minimap-dot.is-selected{
+      border-color: rgba(124, 92, 255, 0.75);
+      background: rgba(124, 92, 255, 0.42);
+      box-shadow: 0 0 0 6px rgba(124,92,255,0.10);
+    }
+
+    .minimap-dot.is-related{
+      border-color: rgba(45, 212, 191, 0.55);
+      background: rgba(45, 212, 191, 0.28);
+    }
+
+    .minimap-dot.is-related.strong{
+      background: rgba(45, 212, 191, 0.40);
+      border-color: rgba(45, 212, 191, 0.75);
+    }
+
+    .minimap-view{
+      position: absolute;
+      left: 4px;
+      right: 4px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.05);
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.18);
+      pointer-events: none;
+    }
+
+    .minimap-note{
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
+    /* Article */
+    .article{
+      padding: 16px 18px;
+    }
+
+    .article h2{
+      margin: 0 0 4px 0;
+      font-size: 22px;
+      letter-spacing: .2px;
+    }
+
+    .article .meta{
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 18px;
+    }
+
+    .article h3{
+      margin: 18px 0 10px 0;
+      font-size: 16px;
+      color: rgba(255,255,255,0.92);
+    }
+
+    .article p{
+      margin: 0 0 12px 0;
+      line-height: 1.85;
+      font-size: 14px;
+      color: rgba(255,255,255,0.90);
+    }
+
+    /* Highlighted quote (golden sentence) */
+    .gq{
+      padding: 2px 4px;
+      border-radius: 8px;
+      background: var(--hl-bg-weak);
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: background .12s ease, border-color .12s ease, box-shadow .12s ease;
+    }
+
+    .gq:hover{
+      background: var(--hl-bg);
+      border-color: rgba(255,255,255,0.10);
+    }
+
+    .gq.is-selected{
+      background: rgba(124, 92, 255, 0.28);
+      border-color: var(--hl-border);
+      box-shadow: 0 0 0 6px rgba(124, 92, 255, 0.10);
+    }
+
+    .gq.is-related{
+      background: rgba(45, 212, 191, 0.18);
+      border-color: rgba(45, 212, 191, 0.45);
+    }
+
+    .gq.is-related.strong{
+      background: rgba(45, 212, 191, 0.26);
+      border-color: rgba(45, 212, 191, 0.70);
+    }
+
+    /* Right panel */
+    .side{
+      position: sticky;
+      top: 12px;
+      height: calc(100vh - 24px);
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .side-body{
+      padding: 14px;
+      overflow: auto;
+    }
+
+    .hint{
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px dashed rgba(255,255,255,0.16);
+      background: rgba(255,255,255,0.03);
+    }
+
+    .picked{
+      display: grid;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .badge{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: rgba(124, 92, 255, 0.10);
+      border: 1px solid rgba(124, 92, 255, 0.35);
+      color: rgba(255,255,255,0.92);
+      font-size: 12px;
+      width: fit-content;
+    }
+
+    .quote{
+      background: var(--panel2);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 12px;
+      padding: 12px;
+      line-height: 1.55;
+      font-size: 13px;
+    }
+
+    .quote .meta{
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .quote .text{
+      color: rgba(255,255,255,0.92);
+    }
+
+    .related-list{
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .rel-card{
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.04);
+      display: grid;
+      gap: 10px;
+    }
+
+    .rel-head{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .rel-head .left{
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .pill{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.04);
+      color: rgba(255,255,255,0.86);
+      font-size: 11px;
+    }
+
+    .heat{
+      height: 8px;
+      border-radius: 999px;
+      background: var(--bar-bg);
+      border: 1px solid rgba(255,255,255,0.10);
+      overflow: hidden;
+    }
+
+    .heat > .fill{
+      height: 100%;
+      width: 0;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(45,212,191,0.45), rgba(124,92,255,0.65));
+      transition: width .12s ease;
+    }
+
+    .rel-actions{
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .linkbtn{
+      border: 1px solid rgba(255,255,255,0.16);
+      background: rgba(255,255,255,0.06);
+      color: rgba(255,255,255,0.88);
+      padding: 6px 8px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .linkbtn:hover{ background: rgba(255,255,255,0.10); }
+
+    .muted{
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 1060px){
+      .layout{ grid-template-columns: 1fr; }
+      .minimap{ position: relative; height: auto; }
+      .side{ position: relative; height: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="title">
+        <h1>金句热力（文章内联 Mock）</h1>
+        <p class="subtitle">点击正文中的划线金句，会在右侧固定栏展示与它相关的其它金句（默认等强/可手动标注权重）。左侧卡尺标出金句在文章中的位置，可点击跳转。</p>
+      </div>
+      <div class="toolbar">
+        <button id="btnClear">取消选中</button>
+      </div>
+    </div>
+
+    <div class="layout">
+      <div class="card minimap" aria-label="金句卡尺">
+        <div class="cap">
+          <span>卡尺</span>
+          <span class="muted" id="mmCount">—</span>
+        </div>
+        <div class="minimap-bar" id="minimapBar">
+          <div class="minimap-rail"></div>
+          <div class="minimap-view" id="minimapView"></div>
+        </div>
+        <div class="minimap-note">提示：选中某句后，相关句的刻度会变亮。</div>
+      </div>
+
+      <div class="card" aria-label="文章正文">
+        <div class="article" id="article">
+          <h2>羊舍一夕</h2>
+          <div class="meta">（又名：四个孩子和一个夜晚） · 汪曾祺</div>
+
+          <h3>一、夜晚</h3>
+
+          <p>火车过来了。</p>
+
+          <p>“216！往北京的上行车，”老九说。</p>
+
+          <p>
+            于是他们放下手里的工作，一起听火车。老九和小吕都好像看见：先是一个雪亮的大灯，亮得叫人眼睛发胀。大灯好像在拼命地往外冒光，而且冒着气，嗤嗤地响。乌黑的铁，锃黄的铜。然后是绿色的车身，排山倒海地冲过来。车窗蜜黄色的灯光连续地映在果园东边的树墙子上，一方块，一方块，川流不息地追赶着……每回看到灯光那样猛烈地从树墙子上刮过去，你总觉得会刮下满地枝叶来似的。可是火车一过，还是那样：树墙子显得格外的安详，格外的绿，真怪。
+          </p>
+
+          <p>
+            这些，老九和小吕都太熟悉了。夏天，他们睡得晚，老是到路口去看火车。可现在是冬天了。那么，现在是什么样子呢？小吕想象，灯光一定会从树墙子的枝叶空隙处漏进来，落到果园的地面上来吧。可能！他想象着那灯光映在大梨树地间作的葱畦里，照着一地的大葱蓬松的，干的，发白的叶子……车轮的声音逐渐模糊成为一片，像刮过一阵大风一样，过去
+            <span class="gq" data-qid="q1">“十点四十七，”老九说。</span>
+            老九在附近的山头上放了好几年羊了，他知道每一趟火车的时刻。
+          </p>
+
+          <p class="muted" style="margin-top:14px;">说明：这里的“金句”只是示例标注（q1/q2/q3）。你后续接入真实页面时，可以把 DOM 里被你划线/收藏的片段替换成同样结构的 <code>&lt;span class="gq" data-qid="..."&gt;</code>。</p>
+
+          <p style="margin-top:12px;">
+            <span class="gq" data-qid="q2">灯光一定会从树墙子的枝叶空隙处漏进来，落到果园的地面上来吧。</span>
+            可能！他想象着那灯光映在大梨树地间作的葱畦里。
+          </p>
+
+          <p>
+            <span class="gq" data-qid="q3">每回看到灯光那样猛烈地从树墙子上刮过去，你总觉得会刮下满地枝叶来似的。</span>
+            可是火车一过，还是那样：树墙子显得格外的安详，格外的绿，真怪。
+          </p>
+
+        </div>
+      </div>
+
+      <div class="card side" aria-label="关联侧栏">
+        <div class="card-head">
+          <div class="label">关联金句</div>
+          <div class="label" id="picked">未选择</div>
+        </div>
+        <div class="side-body" id="sideBody">
+          <div class="hint" id="hint">
+            点击正文里任意一条金句（有底色的划线区域）。我会：
+            <div class="muted" style="margin-top:6px;">
+              1) 在右侧列出与它相关的金句（默认等强）<br/>
+              2) 在正文内对相关句做轻高亮<br/>
+              3) 在左侧卡尺上点亮相关位置
+            </div>
+          </div>
+
+          <div class="picked" id="pickedBox" style="display:none;"></div>
+          <div class="related-list" id="relList" style="display:none;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 手动标注的数据结构（Mock）
+    // 说明：
+    // - qid 对应正文里 data-qid 的金句节点
+    // - text 用于侧栏展示（实际接入时也可直接从 DOM 取）
+    // - links: 这个 qid 和其它 qid 的关系强度(0..1)，第一版可默认等强
+
+    const QUOTES = {
+      q1: { text: "“十点四十七，”老九说。", links: { q2: 0.75, q3: 0.75 } },
+      q2: { text: "灯光一定会从树墙子的枝叶空隙处漏进来，落到果园的地面上来吧。", links: { q1: 0.75, q3: 0.75 } },
+      q3: { text: "每回看到灯光那样猛烈地从树墙子上刮过去，你总觉得会刮下满地枝叶来似的。", links: { q1: 0.75, q2: 0.75 } },
+    };
+
+    const $ = (sel) => document.querySelector(sel);
+    const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+    const elArticle = $("#article");
+    const elPicked = $("#picked");
+    const elPickedBox = $("#pickedBox");
+    const elRelList = $("#relList");
+    const elHint = $("#hint");
+
+    const elMinimapBar = $("#minimapBar");
+    const elMinimapView = $("#minimapView");
+    const elMmCount = $("#mmCount");
+
+    let selectedQid = null;
+
+    function escapeHtml(s){
+      return String(s)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function getQuoteEl(qid){
+      return elArticle.querySelector(`.gq[data-qid="${qid}"]`);
+    }
+
+    function allQuoteEls(){
+      return $$(".gq[data-qid]");
+    }
+
+    function setClassesForSelection(){
+      const nodes = allQuoteEls();
+      for (const n of nodes){
+        n.classList.remove("is-selected", "is-related", "strong");
+      }
+
+      if (!selectedQid) return;
+
+      const selEl = getQuoteEl(selectedQid);
+      if (selEl) selEl.classList.add("is-selected");
+
+      const links = (QUOTES[selectedQid] && QUOTES[selectedQid].links) || {};
+      for (const [qid, w] of Object.entries(links)){
+        const el = getQuoteEl(qid);
+        if (!el) continue;
+        el.classList.add("is-related");
+        if (w >= 0.80) el.classList.add("strong");
+      }
+    }
+
+    function renderSide(){
+      if (!selectedQid){
+        elPicked.textContent = "未选择";
+        elHint.style.display = "block";
+        elPickedBox.style.display = "none";
+        elRelList.style.display = "none";
+        elPickedBox.innerHTML = "";
+        elRelList.innerHTML = "";
+        return;
+      }
+
+      const q = QUOTES[selectedQid];
+      elPicked.textContent = selectedQid;
+      elHint.style.display = "none";
+
+      elPickedBox.style.display = "block";
+      elRelList.style.display = "block";
+
+      elPickedBox.innerHTML = `
+        <div class="badge">当前选中：${escapeHtml(selectedQid)}</div>
+        <div class="quote">
+          <div class="meta"><span>金句</span><span>${escapeHtml(selectedQid)}</span></div>
+          <div class="text">${escapeHtml(q.text)}</div>
+        </div>
+      `;
+
+      const links = Object.entries(q.links || {})
+        .sort((a,b) => (b[1] || 0) - (a[1] || 0));
+
+      if (links.length === 0){
+        elRelList.innerHTML = `<div class="muted">没有标注关联。</div>`;
+        return;
+      }
+
+      elRelList.innerHTML = links.map(([qid, w]) => {
+        const other = QUOTES[qid];
+        const score = typeof w === "number" ? w : 0;
+        const pct = Math.round(Math.max(0, Math.min(1, score)) * 100);
+
+        return `
+          <div class="rel-card" data-target="${escapeHtml(qid)}">
+            <div class="rel-head">
+              <div class="left">
+                <span class="pill">相关句 ${escapeHtml(qid)}</span>
+                <span>强度 ${pct}%</span>
+              </div>
+              <span class="muted">默认/手动</span>
+            </div>
+            <div class="heat"><div class="fill" style="width:${pct}%"></div></div>
+            <div class="muted">${escapeHtml(other?.text || "")}</div>
+            <div class="rel-actions">
+              <button class="linkbtn" data-jump="${escapeHtml(qid)}">定位到正文</button>
+              <button class="linkbtn" data-select="${escapeHtml(qid)}">设为选中</button>
+            </div>
+          </div>
+        `;
+      }).join("");
+
+      // 绑定事件（按钮）
+      for (const btn of $$("button[data-jump]")){
+        btn.addEventListener("click", (e) => {
+          const qid = e.currentTarget.getAttribute("data-jump");
+          jumpTo(qid);
+        });
+      }
+      for (const btn of $$("button[data-select]")){
+        btn.addEventListener("click", (e) => {
+          const qid = e.currentTarget.getAttribute("data-select");
+          selectQid(qid);
+        });
+      }
+    }
+
+    function jumpTo(qid){
+      const el = getQuoteEl(qid);
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+
+      // 给一个短暂的闪烁提示
+      el.animate(
+        [
+          { boxShadow: "0 0 0 0 rgba(124,92,255,0.0)" },
+          { boxShadow: "0 0 0 10px rgba(124,92,255,0.18)" },
+          { boxShadow: "0 0 0 0 rgba(124,92,255,0.0)" },
+        ],
+        { duration: 520, easing: "ease-out" }
+      );
+    }
+
+    function selectQid(qid){
+      if (!qid || !QUOTES[qid]) return;
+      selectedQid = qid;
+      setClassesForSelection();
+      renderSide();
+      renderMinimapState();
+    }
+
+    function clearSelection(){
+      selectedQid = null;
+      setClassesForSelection();
+      renderSide();
+      renderMinimapState();
+    }
+
+    // --- Minimap ---
+    // 用所有金句元素的 offsetTop/scrollHeight 来映射到 mini-bar 的百分比位置。
+
+    function getDocMetrics(){
+      const scrollEl = document.documentElement;
+      const docH = scrollEl.scrollHeight;
+      const winH = window.innerHeight;
+      const y = window.scrollY || scrollEl.scrollTop || 0;
+      return { docH, winH, y };
+    }
+
+    function positionForElement(el){
+      const { docH } = getDocMetrics();
+      const top = el.getBoundingClientRect().top + (window.scrollY || 0);
+      const ratio = docH <= 0 ? 0 : top / docH;
+      return Math.max(0, Math.min(1, ratio));
+    }
+
+    function updateMinimapViewport(){
+      const { docH, winH, y } = getDocMetrics();
+      const barH = elMinimapBar.clientHeight;
+      if (!barH) return;
+
+      const topRatio = docH ? (y / docH) : 0;
+      const viewRatio = docH ? (winH / docH) : 0;
+
+      const topPx = Math.round(topRatio * barH);
+      const hPx = Math.max(18, Math.round(viewRatio * barH));
+
+      elMinimapView.style.top = `${topPx}px`;
+      elMinimapView.style.height = `${hPx}px`;
+    }
+
+    function ensureMinimapDots(){
+      // 清掉旧 dot
+      for (const dot of $$(".minimap-dot")) dot.remove();
+
+      const nodes = allQuoteEls();
+      elMmCount.textContent = `${nodes.length} 句`;
+
+      const barH = elMinimapBar.clientHeight;
+      if (!barH) return;
+
+      for (const n of nodes){
+        const qid = n.getAttribute("data-qid");
+        const ratio = positionForElement(n);
+        const topPx = Math.round(ratio * barH);
+
+        const dot = document.createElement("div");
+        dot.className = "minimap-dot";
+        dot.style.top = `${Math.max(4, Math.min(barH - 14, topPx))}px`;
+        dot.title = `${qid}: ${n.textContent || ""}`;
+        dot.dataset.qid = qid;
+        dot.addEventListener("click", () => {
+          selectQid(qid);
+          jumpTo(qid);
+        });
+        elMinimapBar.appendChild(dot);
+      }
+    }
+
+    function renderMinimapState(){
+      for (const dot of $$(".minimap-dot")){
+        dot.classList.remove("is-selected", "is-related", "strong");
+      }
+
+      if (!selectedQid) return;
+
+      const selDot = elMinimapBar.querySelector(`.minimap-dot[data-qid="${selectedQid}"]`);
+      if (selDot) selDot.classList.add("is-selected");
+
+      const links = (QUOTES[selectedQid] && QUOTES[selectedQid].links) || {};
+      for (const [qid, w] of Object.entries(links)){
+        const d = elMinimapBar.querySelector(`.minimap-dot[data-qid="${qid}"]`);
+        if (!d) continue;
+        d.classList.add("is-related");
+        if (w >= 0.80) d.classList.add("strong");
+      }
+    }
+
+    // --- Init ---
+
+    function bindClicksInArticle(){
+      for (const el of allQuoteEls()){
+        el.addEventListener("click", (e) => {
+          const qid = e.currentTarget.getAttribute("data-qid");
+          if (!qid) return;
+
+          // 再点一次同一句：取消
+          if (selectedQid === qid){
+            clearSelection();
+            return;
+          }
+
+          selectQid(qid);
+        });
+      }
+    }
+
+    function init(){
+      bindClicksInArticle();
+      renderSide();
+
+      // minimap 初次渲染依赖高度，延迟一帧
+      requestAnimationFrame(() => {
+        ensureMinimapDots();
+        updateMinimapViewport();
+        renderMinimapState();
+      });
+
+      window.addEventListener("scroll", () => {
+        updateMinimapViewport();
+      }, { passive: true });
+
+      window.addEventListener("resize", () => {
+        ensureMinimapDots();
+        updateMinimapViewport();
+        renderMinimapState();
+      });
+
+      $("#btnClear").addEventListener("click", clearSelection);
+    }
+
+    init();
+  </script>
+</body>
+</html>
