@@ -17,8 +17,8 @@ console.log('DeepRead content script loaded!');
 // 检测是否在Chrome扩展环境中
 const isExtensionEnvironment = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id;
 
-// 'gemini-2.0-flash-preview-image-generation';
-const MODEL_ID = 'gemini-2.5-flash-lite'
+// gemini-2.5-flash-lite   gemini-flash-lite-latest   gemini-3-flash-preview
+const MODEL_ID = 'gemini-3-flash-preview'
 const PROVIDER = 'google'
 const default_bot_language = '中文'
 const greetingMessage = '您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。';
@@ -26,11 +26,13 @@ const pageSummaryFallback = '抱歉，我暂时无法分析页面内容。请稍
 const conceptExplanationFallback = '的解释暂时无法获取。请稍后再试。';
 const chatResponseFallback = '关于您的问题，我暂时无法回答。请稍后再试。';
 const imageGenerationFallback = '生成图像失败，请稍后再试。';
-
-// 页面分析状态
-let pageAnalyzed = false; // 标记页面是否已经分析过
 // 获取当前页面URL
 const currentUrl = window.location.href;
+
+// API_URL = `https://openrouter.ai/api/v1/chat/completions`;
+const API_BASE_URL = `https://generativelanguage.googleapis.com/v1beta/models/`;
+// 页面分析状态
+let pageAnalyzed = false; // 标记页面是否已经分析过
 let pageTitle = document.title;
 let pageContent = ''; // 存储页面内容
 let pageSummary = ''; // 存储页面摘要
@@ -413,6 +415,23 @@ function createDeepReadPanel() {
 
     // 添加事件监听
     document.getElementById('deepread-analyze-btn').addEventListener('click', analyzePageContent);
+    
+    // // 点击主面板外部区域时隐藏面板
+    // document.addEventListener('click', function(e) {
+    //     const mainContainer = document.getElementById('deepread-container');
+    //     if (mainContainer && !mainContainer.classList.contains('deepread-hidden')) {
+    //         // 检查点击是否在主面板外部，且不是浮动按钮或设置面板
+    //         const isOutsideMainPanel = !mainContainer.contains(e.target);
+    //         const isFloatButton = e.target.closest('.deepread-float-button');
+    //         const isSettingsPanel = e.target.closest('#deepread-settings-panel');
+    //         const isSettingsBtn = e.target.closest('#deepread-settings-btn');
+            
+    //         if (isOutsideMainPanel && !isFloatButton && !isSettingsPanel && !isSettingsBtn) {
+    //             mainContainer.classList.add('deepread-hidden');
+    //             debugLog('点击外部区域，隐藏主面板');
+    //         }
+    //     }
+    // });
 
     // 创建导航指示器
     const navIndicator = document.createElement('div');
@@ -788,59 +807,56 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
             throw new Error('未设置 API Key，请在设置面板中设置您的 Google Gemini API Key');
         }
         
-        // 尝试从存储中获取用户配置的MODEL
+        // 尝试从存储中获取用户配置的MODEL和thinkingLevel
+        let userModelId = MODEL_ID;
+        let userThinkingLevel = 'LOW';
         if (isExtensionEnvironment && chrome.storage) {
             try {
-                // 同步获取存储的MODEL
+                // 同步获取存储的MODEL和thinkingLevel
                 const result = await new Promise(resolve => {
-                    chrome.storage.sync.get(['deepread_model'], resolve);
+                    chrome.storage.sync.get(['deepread_model', 'deepread_thinking_level'], resolve);
                 });
                 
                 if (result.deepread_model && result.deepread_model.trim() !== '') {
-                    MODEL_ID = result.deepread_model.trim();
-                    debugLog(`使用用户配置的MODEL: ${MODEL_ID}`);
+                    userModelId = result.deepread_model.trim();
+                    debugLog(`使用用户配置的MODEL: ${userModelId}`);
+                }
+                if (result.deepread_thinking_level) {
+                    userThinkingLevel = result.deepread_thinking_level;
+                    debugLog(`使用用户配置的thinkingLevel: ${userThinkingLevel}`);
                 }
             } catch (error) {
-                console.error('获取用户配置的MODEL失败:', error);
-                // 出错时使用默认MODEL
+                console.error('获取用户配置失败:', error);
+                // 出错时使用默认值
             }
+        } else {
+            // 非扩展环境使用 localStorage
+            const storedModel = localStorage.getItem('deepread_model');
+            const storedThinkingLevel = localStorage.getItem('deepread_thinking_level');
+            if (storedModel) userModelId = storedModel;
+            if (storedThinkingLevel) userThinkingLevel = storedThinkingLevel;
         }
-        
-        // const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:generateContent?key=${API_KEY}`;
-        const API_URL = `https://openrouter.ai/api/v1/chat/completions`;
-        
+
+        const API_URL = API_BASE_URL + `${userModelId}:generateContent?key=${API_KEY}`
         // 请求配置
-        // const requestBody = {
-        //     contents: contents,
-        //     generationConfig: {
-        //         responseMimeType: 'text/plain',
-        //         temperature: 0.7,
-        //         topP: 0.95,
-        //         topK: 64,
-        //         maxOutputTokens: 8192
-        //     },
-        //     tools: [
-        //         {
-        //             urlContext: {}
-        //         },
-        //         {
-        //             googleSearch: {}
-        //         },
-        //     ],
-        // };
         const requestBody = {
-            model: PROVIDER + '/' + MODEL_ID,
-            messages: contents,
-            // messages: [
-            //     {
-            //       "role": "user",
-            //       "content": "What is the meaning of life?"
-            //     }
-            // ],
-            max_tokens: 8192,
-            temperature: 0.7,
-            top_p: 0.95,
-            top_k: 64,
+            // model: PROVIDER + '/' + MODEL_ID, // openrouter
+            // messages: contents, // openrouter
+            // temperature: 0.7,
+            // top_p: 0.95,
+            // top_k: 64,
+            // max_tokens: 8192,
+            contents: contents, // google
+            generationConfig: { // google
+                responseMimeType: 'text/plain',
+                temperature: 0.7,
+                topP: 0.95,
+                topK: 64,
+                maxOutputTokens: 8192,
+                thinkingConfig: {
+                    thinkingLevel: userThinkingLevel, // MINIMAL, LOW, MEDIUM, HIGH 
+                },
+            },
             tools: [
                 {
                     urlContext: {}
@@ -850,7 +866,7 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
                 },
             ],
         };
-        debugLog(`${apiType} 发送请求到API ${API_URL} \n ${JSON.stringify(requestBody, null, 2)}`);
+        debugLog(`${apiType} 发送请求到API \n ${API_URL}`);
         
         // 创建AbortController来设置超时
         const controller = new AbortController();
@@ -861,7 +877,7 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
             response = await fetch(API_URL, {
                 method: 'POST',
                 headers: {
-                    "Authorization": "Bearer " + API_KEY,
+                    // "Authorization": "Bearer " + API_KEY, // openrouter
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify(requestBody),
@@ -940,27 +956,38 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
             return;
         }
         
-        // 尝试从存储中获取用户配置的MODEL
+        // 尝试从存储中获取用户配置的MODEL和thinkingLevel
+        let userModelId = MODEL_ID;
+        let userThinkingLevel = 'LOW';
         if (isExtensionEnvironment && chrome.storage) {
             try {
-                // 同步获取存储的MODEL
+                // 同步获取存储的MODEL和thinkingLevel
                 const result = await new Promise(resolve => {
-                    chrome.storage.sync.get(['deepread_model'], resolve);
+                    chrome.storage.sync.get(['deepread_model', 'deepread_thinking_level'], resolve);
                 });
                 
                 if (result.deepread_model && result.deepread_model.trim() !== '') {
-                    MODEL_ID = result.deepread_model.trim();
-                    debugLog(`使用用户配置的MODEL: ${MODEL_ID}`);
+                    userModelId = result.deepread_model.trim();
+                    debugLog(`使用用户配置的MODEL: ${userModelId}`);
+                }
+                if (result.deepread_thinking_level) {
+                    userThinkingLevel = result.deepread_thinking_level;
+                    debugLog(`使用用户配置的thinkingLevel: ${userThinkingLevel}`);
                 }
             } catch (error) {
-                console.error('获取用户配置的MODEL失败:', error);
-                // 出错时使用默认MODEL
+                console.error('获取用户配置失败:', error);
+                // 出错时使用默认值
             }
+        } else {
+            // 非扩展环境使用 localStorage
+            const storedModel = localStorage.getItem('deepread_model');
+            const storedThinkingLevel = localStorage.getItem('deepread_thinking_level');
+            if (storedModel) userModelId = storedModel;
+            if (storedThinkingLevel) userThinkingLevel = storedThinkingLevel;
         }
         
-        // 使用streamGenerateContent API
-        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_ID}:streamGenerateContent?key=${API_KEY}`;
-        
+        // 使用 streamGenerateContent API
+        const STREAM_API_URL = API_BASE_URL + `${userModelId}:streamGenerateContent?key=${API_KEY}`;
         // 请求配置
         const requestBody = {
             contents: contents,
@@ -971,7 +998,7 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
                 topK: 64,
                 maxOutputTokens: 8192,
                 thinkingConfig: {
-                    thinkingBudget: -1,
+                    thinkingLevel: userThinkingLevel,
                 },
             },
             tools: [
@@ -983,8 +1010,7 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
                 },
             ],
         };
-        
-        debugLog(`发送流式 ${apiType} 请求到 Google Gemini API \n ${API_URL}`);
+        debugLog(`${apiType} 发送流式请求到 API \n ${STREAM_API_URL}`);
         
         // 创建AbortController来设置超时
         const controller = new AbortController();
@@ -993,7 +1019,7 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
         // 发送请求
         let response;
         try {
-            response = await fetch(API_URL, {
+            response = await fetch(STREAM_API_URL, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -2292,16 +2318,16 @@ async function callAnalyzeContent(content, language) {
     // 构建请求内容
     const contents = [
         {
-            // role: 'user' | 'assistant' | 'system';
-            role: 'system',
-            // role: 'model',
-            content: systemPrompt
-            // parts: [{ text: systemPrompt }]
+            // role: 'user' | 'assistant' | 'system'; // openrouter
+            // role: 'system',
+            role: 'model',
+            // content: systemPrompt // openrouter
+            parts: [{ text: systemPrompt }]
         },
         {
             role: 'user',
-            content: '请分析这篇文章的内容并提取关键信息'
-            // parts: [{ text: '请分析这篇文章的内容并提取关键信息' }]
+            // content: '请分析这篇文章的内容并提取关键信息'
+            parts: [{ text: '请分析这篇文章的内容并提取关键信息' }]
         }
     ];
     
@@ -2877,14 +2903,15 @@ async function callExplanationConcept(conceptName, pageContent = '') {
     // 构建请求体
     const contents = [
         {
-            role: 'system',
-            content: systemPrompt
-            // parts: [{ text: systemPrompt }]
+            // role: 'system', // openrouter
+            // content: systemPrompt // openrouter
+            role: 'model',
+            parts: [{ text: systemPrompt }] // google
         },
         {
             role: 'user',
-            content: `请解释"${conceptName}"这个概念`
-            // parts: [{ text: `请解释"${conceptName}"这个概念` }]
+            // content: `请解释"${conceptName}"这个概念` // openrouter
+            parts: [{ text: `请解释"${conceptName}"这个概念` }]
         }
     ];
 
@@ -4813,22 +4840,36 @@ function createSettingsPanel() {
     
     // 使用Chrome存储API获取设置
     if (isExtensionEnvironment && chrome.storage) {
-        chrome.storage.sync.get(['deepread_api_key', 'deepread_model'], function(result) {
+        chrome.storage.sync.get(['deepread_api_key', 'deepread_model', 'deepread_thinking_level'], function(result) {
             if (result.deepread_api_key) {
                 document.getElementById('deepread-api-key').value = result.deepread_api_key;
             }
             if (result.deepread_model) {
-                document.getElementById('deepread-model').value = result.deepread_model;
-            } else {
-                // 如果没有保存的MODEL，使用默认值
-                document.getElementById('deepread-model').value = MODEL_ID;
+                const savedModel = result.deepread_model;
+                const modelSelect = document.getElementById('deepread-model-select');
+                const customModelInput = document.getElementById('deepread-model-custom');
+                // 检查是否是预置模型
+                const presetOptions = Array.from(modelSelect.options).map(opt => opt.value);
+                if (presetOptions.includes(savedModel)) {
+                    modelSelect.value = savedModel;
+                    customModelInput.style.display = 'none';
+                } else {
+                    modelSelect.value = 'custom';
+                    customModelInput.style.display = 'block';
+                    customModelInput.value = savedModel;
+                }
+            }
+            if (result.deepread_thinking_level) {
+                const thinkingSlider = document.getElementById('deepread-thinking-level');
+                const thinkingValue = document.getElementById('deepread-thinking-value');
+                const levelMap = { 'MINIMAL': 0, 'LOW': 1, 'MEDIUM': 2, 'HIGH': 3 };
+                thinkingSlider.value = levelMap[result.deepread_thinking_level] || 1;
+                thinkingValue.textContent = result.deepread_thinking_level;
             }
         });
     }
     
     // 模型设置和缓存管理
-    // <input type="text" id="deepread-model" class="deepread-settings-input" 
-    //        value="${savedModel}" placeholder="可选，请配置MODEL...">
     content.innerHTML = `
         <div class="deepread-settings-section">
             <h3 id="deepread-settings-title-api">API 设置</h3>
@@ -4837,7 +4878,30 @@ function createSettingsPanel() {
                 <input type="text" id="deepread-api-key" class="deepread-settings-input" 
                        value="${savedApiKey}" placeholder="输入您的API Key...">
             </div>
-            <button id="deepread-save-settings" class="deepread-btn">保存设置</button>
+            <div class="deepread-settings-item">
+                <label for="deepread-model-select">模型选择</label>
+                <select id="deepread-model-select" class="deepread-settings-select">
+                    <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+                    <option value="gemini-flash-lite-latest">gemini-flash-lite-latest</option>
+                    <option value="gemini-3-flash-preview" selected>gemini-3-flash-preview</option>
+                    <option value="custom">自定义模型...</option>
+                </select>
+                <input type="text" id="deepread-model-custom" class="deepread-settings-input" 
+                       style="display: none; margin-top: 8px;" placeholder="输入自定义模型名称...">
+            </div>
+            <div class="deepread-settings-item">
+                <label for="deepread-thinking-level">Thinking Level: <span id="deepread-thinking-value">LOW</span></label>
+                <input type="range" id="deepread-thinking-level" class="deepread-settings-slider" 
+                       min="0" max="3" value="1" step="1">
+                <div class="deepread-slider-labels">
+                    <span>MINIMAL</span>
+                    <span>LOW</span>
+                    <span>MEDIUM</span>
+                    <span>HIGH</span>
+                </div>
+            </div>
+            <button id="deepread-save-settings" class="deepread-btn">仅保存设置</button>
+            <button id="deepread-save-settings-and-refresh" class="deepread-btn">保存并刷新</button>
         </div>
         <div class="deepread-settings-section">
             <h3 id="deepread-settings-title-cache">缓存管理</h3>
@@ -4856,7 +4920,14 @@ function createSettingsPanel() {
     document.body.appendChild(settingsContainer);
     
     // 添加保存按钮事件
-    document.getElementById('deepread-save-settings').addEventListener('click', saveSettings);
+    document.getElementById('deepread-save-settings').addEventListener('click', function() {
+        saveSettings(false);
+    });
+    
+    // 添加保存并刷新按钮事件
+    document.getElementById('deepread-save-settings-and-refresh').addEventListener('click', function() {
+        saveSettings(true);
+    });
     
     // 添加清除缓存按钮事件
     document.getElementById('deepread-clear-cache').addEventListener('click', function() {
@@ -4864,25 +4935,67 @@ function createSettingsPanel() {
             clearAllCache();
         }
     });
+    
+    // 添加模型下拉选项事件
+    document.getElementById('deepread-model-select').addEventListener('change', function() {
+        const customInput = document.getElementById('deepread-model-custom');
+        if (this.value === 'custom') {
+            customInput.style.display = 'block';
+            customInput.focus();
+        } else {
+            customInput.style.display = 'none';
+        }
+    });
+    
+    // 添加 thinkingLevel 拖动条事件
+    document.getElementById('deepread-thinking-level').addEventListener('input', function() {
+        const levels = ['MINIMAL', 'LOW', 'MEDIUM', 'HIGH'];
+        document.getElementById('deepread-thinking-value').textContent = levels[this.value];
+    });
+    
+    // 点击设置面板外部区域时隐藏面板
+    document.addEventListener('click', function(e) {
+        const settingsPanel = document.getElementById('deepread-settings-panel');
+        if (settingsPanel && settingsPanel.style.display !== 'none') {
+            // 检查点击是否在设置面板外部
+            if (!settingsPanel.contains(e.target) && !e.target.closest('#deepread-settings-btn')) {
+                settingsPanel.style.display = 'none';
+            }
+        }
+    });
 }
 
 // 保存设置
-function saveSettings() {
+function saveSettings(shouldRefresh = false) {
     const apiKey = document.getElementById('deepread-api-key').value.trim();
-    // const modelId = document.getElementById('deepread-model').value.trim();
     
-    // 保存API Key和MODEL到Chrome存储
+    // 获取模型设置
+    const modelSelect = document.getElementById('deepread-model-select');
+    const customModelInput = document.getElementById('deepread-model-custom');
+    let modelId = modelSelect.value;
+    if (modelId === 'custom') {
+        modelId = customModelInput.value.trim() || 'gemini-3-flash-preview';
+    }
+    
+    // 获取 thinkingLevel 设置
+    const thinkingSlider = document.getElementById('deepread-thinking-level');
+    const levels = ['MINIMAL', 'LOW', 'MEDIUM', 'HIGH'];
+    const thinkingLevel = levels[thinkingSlider.value];
+    
+    // 保存API Key、MODEL和thinkingLevel到Chrome存储
     if (isExtensionEnvironment && chrome.storage) {
         chrome.storage.sync.set({
             deepread_api_key: apiKey,
-            // deepread_model: modelId
+            deepread_model: modelId,
+            deepread_thinking_level: thinkingLevel
         }, function() {
-            debugLog('API Key和MODEL已保存到Chrome存储');
+            debugLog('设置已保存到Chrome存储: API Key, MODEL=' + modelId + ', thinkingLevel=' + thinkingLevel);
         });
     } else {
         // 如果不是在扩展环境中，使用localStorage作为后备
         localStorage.setItem('deepread_api_key', apiKey);
-        // localStorage.setItem('deepread_model', modelId);
+        localStorage.setItem('deepread_model', modelId);
+        localStorage.setItem('deepread_thinking_level', thinkingLevel);
     }
     
     // 显示保存成功提示
@@ -4898,8 +5011,11 @@ function saveSettings() {
     }, 2000);
     
     debugLog('设置已保存');
-    // 保存设置后，刷新页面
-    location.reload();
+    
+    // 根据参数决定是否刷新页面
+    if (shouldRefresh) {
+        location.reload();
+    }
 }
 
 // 清除所有缓存
