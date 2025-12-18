@@ -3427,7 +3427,7 @@ async function sendChatMessage() {
         // 调用LLM API获取回答 // const response = mockChatResponse(message);
         const responseText = await chatWithAI(message, chatHistory, pageContent, selectedImages);
         const response = processChatResponse(responseText);
-        addChatMessage(response, 'assistant');
+        addChatMessage(response, 'assistant', false, true, [], responseText);
         
         // 清空图片预览（如果发送了图片）
         if (selectedImages.length > 0) {
@@ -3630,7 +3630,7 @@ async function chatWithAI(userMessage, chatHistory = [], pageContent = '', image
                         textElement.innerHTML = processedResponse;
                     }
                     
-                    // 为消息添加操作按钮
+                    // 为消息添加操作按钮（传入原始Markdown用于复制）
                     const actionsContainer = createChatMessageActions(messageId, processedResponse, 'assistant');
                     
                     // 移除现有的操作按钮容器（如果有）
@@ -4235,7 +4235,8 @@ function initChatEvents() {
 }
 
 // 添加聊天消息到对话历史（核心代码）
-function addChatMessage(message, role, isLoading = false, addToHistory = true, images = []) {
+// rawMessage: 原始Markdown文本，用于复制功能（可选，默认等于message）
+function addChatMessage(message, role, isLoading = false, addToHistory = true, images = [], rawMessage = null) {
     const chatMessages = document.getElementById('deepread-chat-messages');
     if (!chatMessages) {
         console.log('未找到聊天消息容器');
@@ -4283,7 +4284,8 @@ function addChatMessage(message, role, isLoading = false, addToHistory = true, i
         messageElement.appendChild(textElement);
     }
     // 保存原始消息内容，用于后续的操作按钮（如复制）
-    messageContent = message;
+    // 优先使用rawMessage（原始Markdown），否则使用message
+    messageContent = rawMessage || message;
     
     // 如果不是加载状态消息（正在思考...），正常消息都会添加操作按钮
     if (!isLoading) {
@@ -4357,22 +4359,14 @@ function createChatMessageActions(messageId, messageContent, role) {
 }
 
 /**
- * 复制消息到剪贴板
- * @param {string} message 要复制的消息
+ * 复制消息到剪贴板（保留Markdown格式）
+ * @param {string} message 要复制的消息（原始Markdown）
  * @param {string} role 消息角色（user或assistant）
  */
 function copyMessageToClipboard(message, role) {
     try {
-        // 如果是助手消息且包含HTML标签，则提取纯文本
-        let textToCopy = message;
-        if (role === 'assistant' && /<[a-z][\s\S]*>/i.test(message)) {
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = message;
-            textToCopy = tempDiv.textContent || tempDiv.innerText || message;
-        }
-        
-        // 复制到剪贴板
-        navigator.clipboard.writeText(textToCopy)
+        // 直接复制消息内容（现在传入的是原始Markdown）
+        navigator.clipboard.writeText(message)
             .then(() => {
                 // 显示成功提示
                 const toast = document.createElement('div');
