@@ -809,7 +809,7 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
         
         // 尝试从存储中获取用户配置的MODEL和thinkingLevel
         let userModelId = MODEL_ID;
-        let userThinkingLevel = 'LOW';
+        let userThinkingLevel = 'MINIMAL';
         if (isExtensionEnvironment && chrome.storage) {
             try {
                 // 同步获取存储的MODEL和thinkingLevel
@@ -958,7 +958,7 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
         
         // 尝试从存储中获取用户配置的MODEL和thinkingLevel
         let userModelId = MODEL_ID;
-        let userThinkingLevel = 'LOW';
+        let userThinkingLevel = 'MINIMAL';
         if (isExtensionEnvironment && chrome.storage) {
             try {
                 // 同步获取存储的MODEL和thinkingLevel
@@ -4863,7 +4863,7 @@ function createSettingsPanel() {
                 const thinkingSlider = document.getElementById('deepread-thinking-level');
                 const thinkingValue = document.getElementById('deepread-thinking-value');
                 const levelMap = { 'MINIMAL': 0, 'LOW': 1, 'MEDIUM': 2, 'HIGH': 3 };
-                thinkingSlider.value = levelMap[result.deepread_thinking_level] || 1;
+                thinkingSlider.value = levelMap[result.deepread_thinking_level] || 0;
                 thinkingValue.textContent = result.deepread_thinking_level;
             }
         });
@@ -4890,9 +4890,9 @@ function createSettingsPanel() {
                        style="display: none; margin-top: 8px;" placeholder="输入自定义模型名称...">
             </div>
             <div class="deepread-settings-item">
-                <label for="deepread-thinking-level">Thinking Level: <span id="deepread-thinking-value">LOW</span></label>
+                <label for="deepread-thinking-level">Thinking Level: <span id="deepread-thinking-value">MINIMAL</span></label>
                 <input type="range" id="deepread-thinking-level" class="deepread-settings-slider" 
-                       min="0" max="3" value="1" step="1">
+                       min="0" max="3" value="0" step="1">
                 <div class="deepread-slider-labels">
                     <span>MINIMAL</span>
                     <span>LOW</span>
