@@ -25,6 +25,8 @@
       --hl-border-weak: rgba(124, 92, 255, 0.30);
 
       --bar-bg: rgba(255,255,255,0.08);
+
+      --minimap-x: 0px;
     }
 
     *{ box-sizing: border-box; }
@@ -83,6 +85,31 @@
       flex-wrap: wrap;
     }
 
+    .minimap-actions{
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .minimap-actions button{
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      border-radius: 12px;
+      font-size: 16px;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .minimap-actions button:disabled{
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
     button{
       border: 1px solid rgba(255,255,255,0.18);
       background: rgba(255,255,255,0.07);
@@ -99,7 +126,7 @@
 
     .layout{
       display: grid;
-      grid-template-columns: 62px 1fr 360px;
+      grid-template-columns: 100px 1fr 360px;
       gap: 12px;
       align-items: start;
     }
@@ -134,8 +161,37 @@
       height: calc(100vh - 24px);
       padding: 10px;
       display: grid;
-      grid-template-rows: auto 1fr auto;
+      grid-template-rows: auto auto auto 1fr;
       gap: 10px;
+      transform: translateX(var(--minimap-x));
+      z-index: 30;
+    }
+
+    .minimap-resize{
+      height: 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.04);
+      cursor: grab;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .minimap-resize:active{
+      cursor: grabbing;
+    }
+
+    .minimap-resize::after{
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, rgba(124,92,255,0.20), rgba(45,212,191,0.18));
+      opacity: 0;
+      transition: opacity .12s ease;
+    }
+
+    .minimap-resize:hover::after{
+      opacity: 1;
     }
 
     .minimap .cap{
@@ -153,12 +209,20 @@
       border: 1px solid rgba(255,255,255,0.12);
       background: rgba(0,0,0,0.18);
       overflow: hidden;
+      min-height: 0;
+      height: 100%;
     }
 
     .minimap-rail{
       position: absolute;
       inset: 0;
-      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+      background:
+        linear-gradient(180deg,
+          rgba(16, 185, 129, 0.10),
+          rgba(250, 204, 21, 0.10),
+          rgba(239, 68, 68, 0.10)
+        ),
+        linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
     }
 
     .minimap-dot{
@@ -276,6 +340,7 @@
       height: calc(100vh - 24px);
       display: grid;
       grid-template-rows: auto 1fr;
+      z-index: 10;
     }
 
     .side-body{
@@ -420,6 +485,7 @@
       .layout{ grid-template-columns: 1fr; }
       .minimap{ position: relative; height: auto; }
       .side{ position: relative; height: auto; }
+      .minimap-bar{ min-height: 160px; }
     }
   </style>
 </head>
@@ -428,24 +494,26 @@
     <div class="header">
       <div class="title">
         <h1>金句热力（文章内联 Mock）</h1>
-        <p class="subtitle">点击正文中的划线金句，会在右侧固定栏展示与它相关的其它金句（默认等强/可手动标注权重）。左侧卡尺标出金句在文章中的位置，可点击跳转。</p>
-      </div>
-      <div class="toolbar">
-        <button id="btnClear">取消选中</button>
+        <p class="subtitle">点击正文中的划线金句，会在右侧固定栏展示与它相关的其它金句（默认等强/可手动标注权重）。左侧卡尺标出金句在文章中的位置，可点击跳转。<br>
+        DEV说明：这里的“金句”只是示例标注（q1/q2/q3）。后续接入真实页面时，可以把 DOM 里被你划线/收藏的片段替换成同样结构的 <code>&lt;span class="gq" data-qid="..."&gt;</code>。<br>
+        </p>
       </div>
     </div>
 
     <div class="layout">
       <div class="card minimap" aria-label="金句卡尺">
+        <div class="minimap-resize" id="minimapPan" title="拖动左右移动卡尺"></div>
+        <div class="minimap-actions" aria-label="操作按钮">
+          <button id="btnApplySel" disabled title="选中划线">+</button>
+          <button id="btnClear" title="占位">*</button>
+        </div>
         <div class="cap">
-          <span>卡尺</span>
           <span class="muted" id="mmCount">—</span>
         </div>
         <div class="minimap-bar" id="minimapBar">
           <div class="minimap-rail"></div>
           <div class="minimap-view" id="minimapView"></div>
         </div>
-        <div class="minimap-note">提示：选中某句后，相关句的刻度会变亮。</div>
       </div>
 
       <div class="card" aria-label="文章正文">
@@ -460,26 +528,37 @@
           <p>“216！往北京的上行车，”老九说。</p>
 
           <p>
-            于是他们放下手里的工作，一起听火车。老九和小吕都好像看见：先是一个雪亮的大灯，亮得叫人眼睛发胀。大灯好像在拼命地往外冒光，而且冒着气，嗤嗤地响。乌黑的铁，锃黄的铜。然后是绿色的车身，排山倒海地冲过来。车窗蜜黄色的灯光连续地映在果园东边的树墙子上，一方块，一方块，川流不息地追赶着……每回看到灯光那样猛烈地从树墙子上刮过去，你总觉得会刮下满地枝叶来似的。可是火车一过，还是那样：树墙子显得格外的安详，格外的绿，真怪。
+            于是他们放下手里的工作，一起听火车。老九和小吕都好像看见：<span class="gq" data-qid="q1">先是一个雪亮的大灯，亮得叫人眼睛发胀。</span>大灯好像在拼命地往外冒光，而且冒着气，嗤嗤地响。乌黑的铁，锃黄的铜。然后是绿色的车身，排山倒海地冲过来。<span class="gq" data-qid="q3">车窗蜜黄色的灯光连续地映在果园东边的树墙子上，一方块，一方块，川流不息地追赶着</span>……每回看到灯光那样猛烈地从树墙子上刮过去，你总觉得会刮下满地枝叶来似的。可是火车一过，还是那样：树墙子显得格外的安详，格外的绿，真怪。
           </p>
 
           <p>
-            这些，老九和小吕都太熟悉了。夏天，他们睡得晚，老是到路口去看火车。可现在是冬天了。那么，现在是什么样子呢？小吕想象，灯光一定会从树墙子的枝叶空隙处漏进来，落到果园的地面上来吧。可能！他想象着那灯光映在大梨树地间作的葱畦里，照着一地的大葱蓬松的，干的，发白的叶子……车轮的声音逐渐模糊成为一片，像刮过一阵大风一样，过去
-            <span class="gq" data-qid="q1">“十点四十七，”老九说。</span>
+            这些，老九和小吕都太熟悉了。夏天，他们睡得晚，老是到路口去看火车。可现在是冬天了。那么，现在是什么样子呢？小吕想象，<span class="gq" data-qid="q2">灯光一定会从树墙子的枝叶空隙处漏进来，落到果园的地面上来吧。</span>可能！他想象着那灯光映在大梨树地间作的葱畦里，照着一地的大葱蓬松的，干的，发白的叶子……车轮的声音逐渐模糊成为一片，像刮过一阵大风一样，过去
+            “十点四十七，”老九说。
             老九在附近的山头上放了好几年羊了，他知道每一趟火车的时刻。
           </p>
 
-          <p class="muted" style="margin-top:14px;">说明：这里的“金句”只是示例标注（q1/q2/q3）。你后续接入真实页面时，可以把 DOM 里被你划线/收藏的片段替换成同样结构的 <code>&lt;span class="gq" data-qid="..."&gt;</code>。</p>
+          <p>留孩说：“贵甲哥怎么还不回来？”</p>
 
-          <p style="margin-top:12px;">
-            <span class="gq" data-qid="q2">灯光一定会从树墙子的枝叶空隙处漏进来，落到果园的地面上来吧。</span>
-            可能！他想象着那灯光映在大梨树地间作的葱畦里。
-          </p>
+          <p>老九说：“他又排戏去了，一定回来得晚。”</p>
 
-          <p>
-            <span class="gq" data-qid="q3">每回看到灯光那样猛烈地从树墙子上刮过去，你总觉得会刮下满地枝叶来似的。</span>
-            可是火车一过，还是那样：树墙子显得格外的安详，格外的绿，真怪。
-          </p>
+          <p>小吕说：“这是什么奶哥！奶弟来了也不陪着，昨天是找羊，今天又去排戏！”</p>
+
+          <p>留孩说：“没关系，以后我们就常在一起了。”</p>
+
+          <p>老九说：“咱们烧山药吃，一边说话，一边等他。小吕，不是还有一包高山顶①吗？坐上！外屋缸里还有没有水？”“有！”</p>
+
+          <p>于是三个人一起动手：小吕拿沙锅舀了多半锅水，抓起一把高山顶来撮在里面。这是老九放羊时摘来的。老九从麻袋里掏山药——他们在山坡上自己种的。留孩把炉子通了通，又加了点煤。</p>
+
+          <p>屋里一顺排了五张木床，联成一个大炕。一张是张士林的，他到狼山给场里买果树苗子去了。隔壁还有一间小屋，锅灶俱全，是老羊倌住的。老羊倌请了假，看他的孙子去了。今天这里只剩下四个孩子：他们三个，和那个正在排戏的。</p>
+
+          <p>屋里有一盏自造的煤油灯——老九用墨水瓶子改造的，一个炉子。外边还有一间空屋，是个农具仓库，放着硫铵、石灰、DDT、铁桶、木叉、喷雾器……外屋门插着。门外，右边是羊圈，里边卧着四百只羊；前边是果园，什么都没有了，只剩下一点葱，还有一堆没有窖好的蔓菁。现在什么也看不见，外边是无边的昏黑。方圆左近，就只有这个半山坡上有一点点亮光。夜，正在深浓起来。”</p>
+
+          <div style="margin-top:12px;line-height:1.8;">
+            <span>（非 p 结构示例）这一段用的是 </span><span>div + span + br</span><span> 来组织。</span><br/>
+            <span>你可以在这一段里随便拖选一段文字，然后点左侧卡尺上的“+”确认生成划线。</span><br/>
+            <span>如果你跨出这个 div 去选到上一段/下一段，按方案 A 应该会被拒绝（不会进入待确认状态）。</span>
+          </div>
+
 
         </div>
       </div>
@@ -514,9 +593,9 @@
     // - links: 这个 qid 和其它 qid 的关系强度(0..1)，第一版可默认等强
 
     const QUOTES = {
-      q1: { text: "“十点四十七，”老九说。", links: { q2: 0.75, q3: 0.75 } },
-      q2: { text: "灯光一定会从树墙子的枝叶空隙处漏进来，落到果园的地面上来吧。", links: { q1: 0.75, q3: 0.75 } },
-      q3: { text: "每回看到灯光那样猛烈地从树墙子上刮过去，你总觉得会刮下满地枝叶来似的。", links: { q1: 0.75, q2: 0.75 } },
+      q1: { text: "先是一个雪亮的大灯，亮得叫人眼睛发胀。", links: { q2: 0, q3: 0 } },
+      q2: { text: "灯光一定会从树墙子的枝叶空隙处漏进来，落到果园的地面上来吧。", links: { q1: 0, q3: 0 } },
+      q3: { text: "车窗蜜黄色的灯光连续地映在果园东边的树墙子上，一方块，一方块，川流不息地追赶着", links: { q1: 0, q2: 0 } },
     };
 
     const $ = (sel) => document.querySelector(sel);
@@ -531,8 +610,16 @@
     const elMinimapBar = $("#minimapBar");
     const elMinimapView = $("#minimapView");
     const elMmCount = $("#mmCount");
+    const elMinimapPan = $("#minimapPan");
 
     let selectedQid = null;
+    let userQuoteSeq = 1;
+    let pendingSelection = null;
+
+    const elBtnApplySel = $("#btnApplySel");
+
+    const STORAGE_KEY_QUOTES = "deepread_quotes";
+    const STORAGE_KEY_USER_HIGHLIGHTS = "deepread_user_highlights";
 
     function escapeHtml(s){
       return String(s)
@@ -543,12 +630,415 @@
         .replaceAll("'", "&#039;");
     }
 
+    function clamp01(x){
+      const n = Number(x);
+      if (Number.isNaN(n)) return 0;
+      return Math.max(0, Math.min(1, n));
+    }
+
+    function randomWeight(){
+      return Math.round(Math.random() * 100) / 100;
+    }
+
+    function ensureSymLink(a, b, w){
+      if (!a || !b) return;
+      if (!QUOTES[a] || !QUOTES[b]) return;
+      if (!QUOTES[a].links) QUOTES[a].links = {};
+      if (!QUOTES[b].links) QUOTES[b].links = {};
+      const ww = clamp01(w);
+      QUOTES[a].links[b] = ww;
+      QUOTES[b].links[a] = ww;
+    }
+
+    function randomizeExistingLinks(){
+      const ids = Object.keys(QUOTES);
+      for (let i = 0; i < ids.length; i++){
+        for (let j = i + 1; j < ids.length; j++){
+          ensureSymLink(ids[i], ids[j], randomWeight());
+        }
+      }
+    }
+
+    function weightToHeatColor(w){
+      // 0..1: green -> yellow -> red
+      const ww = clamp01(w);
+      const hue = 120 - ww * 120; // 120(green) -> 0(red)
+      const sat = 85;
+      const light = 52;
+      return `hsl(${hue} ${sat}% ${light}%)`;
+    }
+
+    function getMinimapX(){
+      const raw = getComputedStyle(document.documentElement).getPropertyValue("--minimap-x");
+      const v = parseInt(String(raw || "").trim(), 10);
+      return Number.isFinite(v) ? v : 0;
+    }
+
+    function setMinimapX(px){
+      const x = Math.round(Number(px) || 0);
+      document.documentElement.style.setProperty("--minimap-x", `${x}px`);
+      try{
+        localStorage.setItem("deepread_minimap_x", String(x));
+      }catch{}
+    }
+
+    function restoreMinimapX(){
+      try{
+        const v = parseInt(localStorage.getItem("deepread_minimap_x") || "", 10);
+        if (Number.isFinite(v)){
+          setMinimapX(v);
+        }
+      }catch{}
+    }
+
+    function bindMinimapPan(){
+      if (!elMinimapPan) return;
+      let dragging = false;
+      let startX = 0;
+      let startOffset = 0;
+      let minOffset = null;
+      let maxOffset = null;
+
+      elMinimapPan.addEventListener("pointerdown", (e) => {
+        if (window.matchMedia("(max-width: 1060px)").matches) return;
+        const elWrap = document.querySelector(".wrap");
+        const elMinimapCard = document.querySelector(".card.minimap");
+        if (!elWrap || !elMinimapCard) return;
+
+        const wrapRect = elWrap.getBoundingClientRect();
+        const mmRect = elMinimapCard.getBoundingClientRect();
+
+        dragging = true;
+        startX = e.clientX;
+        startOffset = getMinimapX();
+
+        // 计算本次拖动允许的偏移范围：
+        // - 左边界：minimap 左边不小于 wrap 左边
+        // - 右边界：minimap 右边不大于 wrap 右边
+        // 用“当前偏移 + 可移动距离”来得到绝对偏移范围
+        const canMoveLeft = mmRect.left - wrapRect.left;
+        const canMoveRight = wrapRect.right - mmRect.right;
+        minOffset = startOffset - canMoveLeft;
+        maxOffset = startOffset + canMoveRight;
+
+        elMinimapPan.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      });
+
+      elMinimapPan.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        const dx = e.clientX - startX;
+        let next = startOffset + dx;
+        if (typeof minOffset === "number") next = Math.max(minOffset, next);
+        if (typeof maxOffset === "number") next = Math.min(maxOffset, next);
+        setMinimapX(next);
+      });
+
+      function endDrag(){
+        dragging = false;
+        minOffset = null;
+        maxOffset = null;
+      }
+
+      elMinimapPan.addEventListener("pointerup", endDrag);
+      elMinimapPan.addEventListener("pointercancel", endDrag);
+    }
+
     function getQuoteEl(qid){
       return elArticle.querySelector(`.gq[data-qid="${qid}"]`);
     }
 
     function allQuoteEls(){
       return $$(".gq[data-qid]");
+    }
+
+    function setPendingSelection(next){
+      pendingSelection = next;
+      if (!elBtnApplySel) return;
+      elBtnApplySel.disabled = !pendingSelection;
+    }
+
+    function closestBlockContainer(node){
+      if (!node) return null;
+      let el = (node.nodeType === Node.ELEMENT_NODE) ? node : node.parentElement;
+      if (!el) return null;
+
+      // 优先匹配常见块级承载容器
+      const quick = el.closest("p,li,blockquote,pre,h1,h2,h3,h4,h5,h6,td,th,div");
+      if (quick && elArticle && elArticle.contains(quick) && quick !== elArticle) return quick;
+
+      // 兜底：向上找第一个非 inline 的元素作为容器
+      while (el && elArticle && el !== elArticle){
+        const cs = getComputedStyle(el);
+        const display = cs ? cs.display : "";
+        if (display && display !== "inline" && display !== "contents") return el;
+        el = el.parentElement;
+      }
+      return null;
+    }
+
+    function isRangeInArticle(range){
+      if (!range) return false;
+      const sc = range.startContainer;
+      const ec = range.endContainer;
+      return elArticle.contains(sc) && elArticle.contains(ec);
+    }
+
+    function getTextNodesIn(el){
+      const out = [];
+      const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+        acceptNode: (n) => {
+          if (!n.nodeValue) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+      let n;
+      while ((n = tw.nextNode())) out.push(n);
+      return out;
+    }
+
+    function calcOffsetWithin(el, container, offset){
+      const nodes = getTextNodesIn(el);
+      let acc = 0;
+      for (const n of nodes){
+        if (n === container) return acc + offset;
+        acc += n.nodeValue.length;
+      }
+      // 如果 container 不是文本节点（极少数情况），尝试定位到其前一个文本节点
+      if (container && container.nodeType === Node.ELEMENT_NODE){
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let last = null;
+        let cur;
+        while ((cur = walker.nextNode())){
+          if (container.contains(cur)){
+            // offset 指向 element child index；这里退化为 element 起始
+            return acc;
+          }
+          last = cur;
+          acc += cur.nodeValue.length;
+        }
+        if (last) return acc;
+      }
+      return acc;
+    }
+
+    function getSpanOffsets(spanEl){
+      if (!spanEl) return null;
+      const containerEl = closestBlockContainer(spanEl);
+      if (!containerEl) return null;
+
+      try{
+        const rStart = document.createRange();
+        rStart.selectNodeContents(containerEl);
+        rStart.setEndBefore(spanEl);
+        const start = rStart.toString().length;
+
+        const rEnd = document.createRange();
+        rEnd.selectNodeContents(containerEl);
+        rEnd.setEndAfter(spanEl);
+        const end = rEnd.toString().length;
+
+        return { start, end };
+      }catch{
+        return null;
+      }
+    }
+
+    function nodeAtOffset(el, targetOffset){
+      const nodes = getTextNodesIn(el);
+      let acc = 0;
+      for (const n of nodes){
+        const len = n.nodeValue.length;
+        if (targetOffset <= acc + len){
+          return { node: n, offset: Math.max(0, targetOffset - acc) };
+        }
+        acc += len;
+      }
+      // 落在末尾
+      if (nodes.length === 0) return null;
+      const last = nodes[nodes.length - 1];
+      return { node: last, offset: last.nodeValue.length };
+    }
+
+    function unwrapSpan(el){
+      const text = document.createTextNode(el.textContent || "");
+      el.replaceWith(text);
+    }
+
+    function normalizeRangeOffsets(a, b){
+      const s = Math.min(a, b);
+      const e = Math.max(a, b);
+      return { start: s, end: e };
+    }
+
+    function generateUserQid(){
+      const seq = userQuoteSeq++;
+      return `uq${seq}`;
+    }
+
+    function saveToLocalStorage(){
+      try{
+        // 保存 QUOTES 数据结构
+        localStorage.setItem(STORAGE_KEY_QUOTES, JSON.stringify(QUOTES));
+        
+        // 保存用户新增划线的位置信息（用于恢复 DOM）
+        const userHighlights = [];
+        for (const qid of Object.keys(QUOTES)){
+          if (!qid.startsWith("uq")) continue; // 只保存用户新增的
+          const el = getQuoteEl(qid);
+          if (!el) continue;
+          
+          const container = closestBlockContainer(el);
+          if (!container) continue;
+          
+          const containerPath = getElementPath(container);
+          const offsets = getSpanOffsets(el);
+          if (!offsets || !containerPath) continue;
+          
+          userHighlights.push({
+            qid,
+            containerPath,
+            start: offsets.start,
+            end: offsets.end,
+            text: QUOTES[qid].text
+          });
+        }
+        localStorage.setItem(STORAGE_KEY_USER_HIGHLIGHTS, JSON.stringify(userHighlights));
+      }catch(err){
+        console.warn("保存到 localStorage 失败:", err);
+      }
+    }
+
+    function getElementPath(el){
+      // 生成一个简单的选择器路径（基于 id/class/tag + nth-child）
+      const path = [];
+      let current = el;
+      while (current && current !== elArticle && current !== document.body){
+        let selector = current.tagName.toLowerCase();
+        if (current.id) selector += `#${current.id}`;
+        else if (current.className) selector += `.${Array.from(current.classList).join(".")}`;
+        
+        // 添加 nth-child 以提高精确度
+        const parent = current.parentElement;
+        if (parent){
+          const siblings = Array.from(parent.children);
+          const index = siblings.indexOf(current) + 1;
+          selector += `:nth-child(${index})`;
+        }
+        
+        path.unshift(selector);
+        current = current.parentElement;
+      }
+      return path.join(" > ");
+    }
+
+    function restoreFromLocalStorage(){
+      try{
+        // 1) 恢复 QUOTES 数据
+        const savedQuotes = localStorage.getItem(STORAGE_KEY_QUOTES);
+        if (savedQuotes){
+          const parsed = JSON.parse(savedQuotes);
+          // 合并到现有 QUOTES（保留预设的 q1/q2/q3）
+          for (const [qid, data] of Object.entries(parsed)){
+            if (qid.startsWith("uq")){
+              QUOTES[qid] = data;
+              // 更新 userQuoteSeq 避免 ID 冲突
+              const num = parseInt(qid.substring(2), 10);
+              if (!isNaN(num) && num >= userQuoteSeq){
+                userQuoteSeq = num + 1;
+              }
+            }
+          }
+        }
+        
+        // 2) 恢复用户划线的 DOM 包裹
+        const savedHighlights = localStorage.getItem(STORAGE_KEY_USER_HIGHLIGHTS);
+        if (savedHighlights){
+          const highlights = JSON.parse(savedHighlights);
+          for (const h of highlights){
+            try{
+              const container = document.querySelector(h.containerPath);
+              if (!container || !elArticle.contains(container)) continue;
+              
+              // 检查是否已经存在（避免重复包裹）
+              if (getQuoteEl(h.qid)) continue;
+              
+              // 重新包裹
+              const startLoc = nodeAtOffset(container, h.start);
+              const endLoc = nodeAtOffset(container, h.end);
+              if (!startLoc || !endLoc) continue;
+              
+              const range = document.createRange();
+              range.setStart(startLoc.node, startLoc.offset);
+              range.setEnd(endLoc.node, endLoc.offset);
+              
+              const span = document.createElement("span");
+              span.className = "gq";
+              span.setAttribute("data-qid", h.qid);
+              
+              const frag = range.extractContents();
+              span.appendChild(frag);
+              range.insertNode(span);
+            }catch(err){
+              console.warn(`恢复划线 ${h.qid} 失败:`, err);
+            }
+          }
+        }
+      }catch(err){
+        console.warn("从 localStorage 恢复失败:", err);
+      }
+    }
+
+    function addRandomLinksForNewQid(newQid){
+      if (!newQid || !QUOTES[newQid]) return;
+      for (const otherQid of Object.keys(QUOTES)){
+        if (otherQid === newQid) continue;
+        ensureSymLink(newQid, otherQid, randomWeight());
+      }
+    }
+
+    function addOrReplaceHighlightInContainer(containerEl, start, end){
+      if (!containerEl) return null;
+      const fullTextLen = (containerEl.textContent || "").length;
+      const s = Math.max(0, Math.min(fullTextLen, start));
+      const e = Math.max(0, Math.min(fullTextLen, end));
+      if (e <= s) return null;
+
+      // 1) 找到与 [s,e) 有任意重叠的现有 gq，并整体移除（最新覆盖旧的）
+      const spans = Array.from(containerEl.querySelectorAll(".gq[data-qid]"));
+      for (const sp of spans){
+        const r = getSpanOffsets(sp);
+        if (!r) continue;
+        if (rangesOverlap({ start: s, end: e }, r)){
+          unwrapSpan(sp);
+        }
+      }
+
+      // 2) 重新定位 range（因为上面可能改动了 DOM）
+      const startLoc = nodeAtOffset(containerEl, s);
+      const endLoc = nodeAtOffset(containerEl, e);
+      if (!startLoc || !endLoc) return null;
+
+      const range = document.createRange();
+      range.setStart(startLoc.node, startLoc.offset);
+      range.setEnd(endLoc.node, endLoc.offset);
+
+      const selectedText = range.toString();
+      if (!selectedText || !selectedText.trim()) return null;
+
+      const qid = generateUserQid();
+      const span = document.createElement("span");
+      span.className = "gq";
+      span.setAttribute("data-qid", qid);
+
+      const frag = range.extractContents();
+      span.appendChild(frag);
+      range.insertNode(span);
+
+      QUOTES[qid] = { text: span.textContent || "", links: {} };
+      addRandomLinksForNewQid(qid);
+      saveToLocalStorage();
+      return qid;
     }
 
     function setClassesForSelection(){
@@ -609,6 +1099,7 @@
         const other = QUOTES[qid];
         const score = typeof w === "number" ? w : 0;
         const pct = Math.round(Math.max(0, Math.min(1, score)) * 100);
+        const color = weightToHeatColor(score);
 
         return `
           <div class="rel-card" data-target="${escapeHtml(qid)}">
@@ -619,7 +1110,7 @@
               </div>
               <span class="muted">默认/手动</span>
             </div>
-            <div class="heat"><div class="fill" style="width:${pct}%"></div></div>
+            <div class="heat"><div class="fill" style="width:${pct}%;background:${color}"></div></div>
             <div class="muted">${escapeHtml(other?.text || "")}</div>
             <div class="rel-actions">
               <button class="linkbtn" data-jump="${escapeHtml(qid)}">定位到正文</button>
@@ -668,6 +1159,28 @@
       renderMinimapState();
     }
 
+    function deleteQid(qid){
+      if (!qid || !QUOTES[qid]) return;
+      const el = getQuoteEl(qid);
+      if (el) unwrapSpan(el);
+
+      delete QUOTES[qid];
+      for (const q of Object.values(QUOTES)){
+        if (q && q.links && Object.prototype.hasOwnProperty.call(q.links, qid)){
+          delete q.links[qid];
+        }
+      }
+
+      if (selectedQid === qid) selectedQid = null;
+
+      saveToLocalStorage();
+      setClassesForSelection();
+      renderSide();
+      ensureMinimapDots();
+      updateMinimapViewport();
+      renderMinimapState();
+    }
+
     function clearSelection(){
       selectedQid = null;
       setClassesForSelection();
@@ -687,9 +1200,13 @@
     }
 
     function positionForElement(el){
-      const { docH } = getDocMetrics();
-      const top = el.getBoundingClientRect().top + (window.scrollY || 0);
-      const ratio = docH <= 0 ? 0 : top / docH;
+      // 相对于文章区域计算位置，而不是整个文档
+      const articleRect = elArticle.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      const articleH = elArticle.scrollHeight || articleRect.height;
+      if (articleH <= 0) return 0;
+      const relTop = elRect.top - articleRect.top;
+      const ratio = relTop / articleH;
       return Math.max(0, Math.min(1, ratio));
     }
 
@@ -701,8 +1218,12 @@
       const topRatio = docH ? (y / docH) : 0;
       const viewRatio = docH ? (winH / docH) : 0;
 
-      const topPx = Math.round(topRatio * barH);
-      const hPx = Math.max(18, Math.round(viewRatio * barH));
+      const topPad = 5;
+      const bottomPad = 5;
+      const usableH = Math.max(1, barH - topPad - bottomPad);
+
+      const topPx = Math.round(topPad + topRatio * usableH);
+      const hPx = Math.max(18, Math.round(viewRatio * usableH));
 
       elMinimapView.style.top = `${topPx}px`;
       elMinimapView.style.height = `${hPx}px`;
@@ -718,14 +1239,18 @@
       const barH = elMinimapBar.clientHeight;
       if (!barH) return;
 
+      const topPad = 5;
+      const bottomPad = 5;
+      const usableH = Math.max(1, barH - topPad - bottomPad);
+
       for (const n of nodes){
         const qid = n.getAttribute("data-qid");
         const ratio = positionForElement(n);
-        const topPx = Math.round(ratio * barH);
+        const topPx = Math.round(topPad + ratio * usableH);
 
         const dot = document.createElement("div");
         dot.className = "minimap-dot";
-        dot.style.top = `${Math.max(4, Math.min(barH - 14, topPx))}px`;
+        dot.style.top = `${Math.max(topPad, Math.min(barH - bottomPad, topPx))}px`;
         dot.title = `${qid}: ${n.textContent || ""}`;
         dot.dataset.qid = qid;
         dot.addEventListener("click", () => {
@@ -739,6 +1264,8 @@
     function renderMinimapState(){
       for (const dot of $$(".minimap-dot")){
         dot.classList.remove("is-selected", "is-related", "strong");
+        dot.style.background = "";
+        dot.style.borderColor = "";
       }
 
       if (!selectedQid) return;
@@ -751,31 +1278,100 @@
         const d = elMinimapBar.querySelector(`.minimap-dot[data-qid="${qid}"]`);
         if (!d) continue;
         d.classList.add("is-related");
-        if (w >= 0.80) d.classList.add("strong");
+        const ww = clamp01(w);
+        const c = weightToHeatColor(ww);
+        d.style.background = c;
+        d.style.borderColor = c;
+        if (ww >= 0.80) d.classList.add("strong");
       }
     }
 
     // --- Init ---
 
     function bindClicksInArticle(){
-      for (const el of allQuoteEls()){
-        el.addEventListener("click", (e) => {
-          const qid = e.currentTarget.getAttribute("data-qid");
-          if (!qid) return;
+      // 用事件代理支持动态新增的划线
+      elArticle.addEventListener("click", (e) => {
+        const hit = e.target && e.target.closest ? e.target.closest(".gq[data-qid]") : null;
+        if (!hit || !elArticle.contains(hit)) return;
+        const qid = hit.getAttribute("data-qid");
+        if (!qid) return;
 
-          // 再点一次同一句：取消
-          if (selectedQid === qid){
-            clearSelection();
-            return;
-          }
+        if (selectedQid === qid){
+          clearSelection();
+          return;
+        }
 
-          selectQid(qid);
-        });
-      }
+        selectQid(qid);
+      });
+    }
+
+    function bindUserHighlighting(){
+      document.addEventListener("mouseup", () => {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        if (sel.isCollapsed) return;
+
+        const range = sel.getRangeAt(0);
+        if (!isRangeInArticle(range)) return;
+
+        const cStart = closestBlockContainer(range.startContainer);
+        const cEnd = closestBlockContainer(range.endContainer);
+        if (!cStart || !cEnd || cStart !== cEnd) return;
+
+        const { start, end } = normalizeRangeOffsets(
+          calcOffsetWithin(cStart, range.startContainer, range.startOffset),
+          calcOffsetWithin(cStart, range.endContainer, range.endOffset)
+        );
+
+        // 仅缓存为待确认的选择，不直接生成划线，避免误操作
+        const previewText = (range.toString() || "").trim();
+        if (!previewText) return;
+        setPendingSelection({ pEl: cStart, start, end, text: previewText });
+      });
+    }
+
+    function applyPendingSelection(){
+      if (!pendingSelection) return;
+      const { pEl, start, end } = pendingSelection;
+      const qid = addOrReplaceHighlightInContainer(pEl, start, end);
+      setPendingSelection(null);
+      const sel = window.getSelection();
+      if (sel) sel.removeAllRanges();
+      if (!qid) return;
+
+      selectQid(qid);
+      ensureMinimapDots();
+      updateMinimapViewport();
+      renderMinimapState();
+    }
+
+    function bindDeleteHotkey(){
+      document.addEventListener("keydown", (e) => {
+        if (!selectedQid) return;
+        if (e.key !== "Backspace" && e.key !== "Delete") return;
+
+        const tag = (e.target && e.target.tagName) ? String(e.target.tagName).toLowerCase() : "";
+        const editable = (e.target && (e.target.isContentEditable || tag === "input" || tag === "textarea"));
+        if (editable) return;
+
+        e.preventDefault();
+        deleteQid(selectedQid);
+      });
     }
 
     function init(){
+      // 从 localStorage 恢复用户数据
+      restoreFromLocalStorage();
+      
+      // 初始化时把预设 q1/q2/q3 的权重随机化（对称）
+      randomizeExistingLinks();
+
+      restoreMinimapX();
+      bindMinimapPan();
+
       bindClicksInArticle();
+      bindUserHighlighting();
+      bindDeleteHotkey();
       renderSide();
 
       // minimap 初次渲染依赖高度，延迟一帧
@@ -795,10 +1391,14 @@
         renderMinimapState();
       });
 
-      $("#btnClear").addEventListener("click", clearSelection);
+      if (elBtnApplySel){
+        elBtnApplySel.addEventListener("click", applyPendingSelection);
+        elBtnApplySel.disabled = true;
+      }
     }
 
     init();
   </script>
 </body>
 </html>
+
