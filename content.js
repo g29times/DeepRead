@@ -45,6 +45,97 @@ let chatHistory = [];
 let conceptHistory = [];
 let currentConceptIndex = -1; // 当前浏览的概念索引
 
+let highlightHistory = []; // 用户划线历史（独立于 conceptHistory）
+
+let lastSelectionRange = null;
+let lastSelectionParagraphId = null;
+let lastSelectionOffsets = null;
+
+let selectedHighlightId = null;
+
+function isDeepReadMinimapPinned(){
+    try{
+        return localStorage.getItem('deepread_minimap_pinned') === '1';
+    }catch{
+        return false;
+    }
+}
+
+function setDeepReadMinimapPinned(v){
+    try{
+        localStorage.setItem('deepread_minimap_pinned', v ? '1' : '0');
+    }catch{}
+}
+
+function showDeepReadMinimapPinned(restore = true){
+    const minimap = ensureDeepReadMinimap();
+    if (!minimap) return null;
+    minimap.classList.remove('deepread-hidden');
+    setDeepReadMinimapPinned(true);
+    if (restore){
+        restoreHighlightsFromCacheAndRender().catch(err => console.warn('恢复划线失败:', err));
+    }
+    return minimap;
+}
+
+function findParagraphEl(pid){
+    if (!pid) return null;
+    try{
+        const direct = document.getElementById(pid);
+        if (direct) return direct;
+        const esc = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(pid) : String(pid).replace(/"/g, '\\"');
+        const byData = document.querySelector(`[data-dr-paragraph-id="${esc}"]`);
+        if (byData) return byData;
+    }catch{}
+    return null;
+}
+
+function updateMinimapUIIfVisible({ previewText = '', previewHid = null } = {}){
+    const minimap = document.getElementById('deepread-minimap') || null;
+    if (!minimap || minimap.classList.contains('deepread-hidden')) return;
+    try{
+        renderHighlightMinimapDots();
+        updateDeepReadMinimapViewport();
+        if (previewHid){
+            setHighlightPreviewText(previewText || '', previewHid);
+        }
+    }catch(err){
+        console.warn('DeepRead: 刷新 minimap 失败:', err);
+    }
+}
+
+async function ensureParagraphIdsReadyForHighlights(highlights){
+    // 只有当 highlight 使用 paragraph-* 体系时才需要（否则一般是网页原生 id，可直接定位）
+    const hs = Array.isArray(highlights) ? highlights : [];
+    const needsParagraphIds = hs.some(h => h && typeof h.paragraphId === 'string' && h.paragraphId.startsWith('paragraph-'));
+    if (!needsParagraphIds) return;
+
+    // 如果已经有段落标记（存在任意 data-dr-paragraph-id="paragraph-0"），则认为已就绪
+    if (document.querySelector('[data-dr-paragraph-id^="paragraph-"]')) return;
+
+    // 避免重复执行导致卡顿
+    if (window.__deepreadParagraphIdsReady) return;
+    if (window.__deepreadParagraphIdsPromise) {
+        try { await window.__deepreadParagraphIdsPromise; } catch {}
+        return;
+    }
+
+    window.__deepreadParagraphIdsPromise = (async () => {
+        try{
+            await addParagraphIds();
+            window.__deepreadParagraphIdsReady = true;
+        } finally {
+            window.__deepreadParagraphIdsPromise = null;
+        }
+    })();
+
+    try{
+        await window.__deepreadParagraphIdsPromise;
+    }catch(err){
+        console.warn('DeepRead: 自动补段落ID失败（用于恢复划线）:', err);
+    }
+}
+
 // 当页面加载完成后初始化 2秒
 window.addEventListener('load', function() {
     // 在Chrome扩展环境中，等待一小段时间再初始化，确保页面完全加载
@@ -89,6 +180,496 @@ function setupClearCacheShortcut() {
     console.log('DeepRead: 已设置清除缓存快捷键 Alt+Shift+C');
 }
 
+// Highlight 控制函数
+function normalizeRangeOffsets(a, b){
+    const s = Math.min(a, b);
+    const e = Math.max(a, b);
+    return { start: s, end: e };
+}
+
+function generateHighlightId(){
+    return `hl_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function unwrapSpan(el){
+    if (!el) return;
+    const text = document.createTextNode(el.textContent || '');
+    el.replaceWith(text);
+}
+
+function getUserHighlightElById(hid){
+    if (!hid) return null;
+    return document.querySelector(`.deepread-user-highlight[data-hid="${hid}"]`);
+}
+
+function isEditableTarget(target){
+    if (!target) return false;
+    const el = target.nodeType === Node.ELEMENT_NODE ? target : target.parentElement;
+    if (!el) return false;
+    if (el.isContentEditable) return true;
+    const tag = (el.tagName || '').toUpperCase();
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+}
+
+function setSelectedHighlightId(hid){
+    selectedHighlightId = hid || null;
+    document.querySelectorAll('.deepread-user-highlight.deepread-user-highlight-selected').forEach(el => {
+        el.classList.remove('deepread-user-highlight-selected');
+    });
+    if (selectedHighlightId){
+        const el = getUserHighlightElById(selectedHighlightId);
+        if (el) el.classList.add('deepread-user-highlight-selected');
+    }
+}
+
+function showFloatActionsForExistingHighlight({ x, y, highlight, paragraphId } = {}){
+    try{
+        const existingButtons = document.querySelectorAll('.deepread-float-button');
+        existingButtons.forEach(button => {
+            try{ if (document.body.contains(button)) document.body.removeChild(button); }catch{}
+        });
+
+        const floatButton = document.createElement('div');
+        floatButton.className = 'deepread-float-button';
+        floatButton.title = 'DeepRead';
+        floatButton.innerHTML = `
+            <button class="deepread-float-action deepread-float-highlight" type="button" title="划线">划线</button>
+            <button class="deepread-float-action deepread-float-explain" type="button" title="解释">解释</button>
+        `;
+        floatButton.style.left = (Number(x || 0) + 10) + 'px';
+        floatButton.style.top = (Number(y || 0) + 10) + 'px';
+
+        floatButton.addEventListener('mousedown', function(e) {
+            e.stopPropagation();
+        });
+
+        const btnHighlight = floatButton.querySelector('.deepread-float-highlight');
+        const btnExplain = floatButton.querySelector('.deepread-float-explain');
+
+        if (btnHighlight){
+            // 对“已存在的划线”再次点击划线按钮：无动作（仅关闭浮窗）
+            btnHighlight.addEventListener('click', function(e){
+                e.stopPropagation();
+                e.preventDefault();
+                try{ floatButton.remove(); }catch{}
+            });
+        }
+
+        if (btnExplain){
+            btnExplain.addEventListener('click', function(e){
+                e.stopPropagation();
+                e.preventDefault();
+                try{ floatButton.remove(); }catch{}
+
+                const text = String((highlight && highlight.text) || '').trim();
+                if (!text) return;
+                const anchorData = { paragraphId: paragraphId || (highlight && highlight.paragraphId) };
+                if (highlight && typeof highlight.start === 'number' && typeof highlight.end === 'number'){
+                    anchorData.start = highlight.start;
+                    anchorData.end = highlight.end;
+                    anchorData.text = highlight.text;
+                }
+                openDeepReadWithConcept(text, anchorData);
+            });
+        }
+
+        document.body.appendChild(floatButton);
+    }catch(err){
+        console.warn('DeepRead: showFloatActionsForExistingHighlight failed:', err);
+    }
+}
+
+function showDeepReadToast(text, type = 'info'){
+    try{
+        const toast = document.createElement('div');
+        toast.textContent = String(text || '');
+        toast.style.position = 'fixed';
+        toast.style.top = '18px';
+        toast.style.left = '50%';
+        toast.style.transform = 'translateX(-50%)';
+        toast.style.backgroundColor = type === 'success' ? 'rgba(33, 150, 243, 0.92)' : (type === 'error' ? 'rgba(244, 67, 54, 0.92)' : 'rgba(0, 0, 0, 0.78)');
+        toast.style.color = 'white';
+        toast.style.padding = '8px 14px';
+        toast.style.borderRadius = '10px';
+        toast.style.zIndex = '10000';
+        toast.style.maxWidth = '80vw';
+        toast.style.fontSize = '12px';
+        toast.style.lineHeight = '1.3';
+        document.body.appendChild(toast);
+        setTimeout(() => {
+            try{ toast.remove(); }catch{}
+        }, 1600);
+    }catch{}
+}
+
+// 发送笔记到飞书
+function getDeepReadFeishuWebhookUrl(){
+    try{
+        return (localStorage.getItem('deepread_feishu_webhook_url') || '').trim();
+    }catch{
+        return '';
+    }
+}
+
+async function copyHighlightToClipboard(highlight){
+    if (!highlight) {
+        showDeepReadToast('没有可复制的划线内容', 'error');
+        return;
+    }
+    const text = String(highlight.text || '').trim();
+    try{
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+        } else {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            ta.style.top = '-9999px';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+        }
+        showDeepReadToast('已复制', 'success');
+    } catch (err) {
+        console.warn('DeepRead: 复制失败:', err);
+        showDeepReadToast('复制失败', 'error');
+    }
+}
+
+async function sendHighlightToFeishu(highlight){
+    const webhookUrl = getDeepReadFeishuWebhookUrl();
+    if (!webhookUrl){
+        showDeepReadToast('请先配置 deepread_feishu_webhook_url', 'error');
+        return;
+    }
+    if (!highlight || !highlight.text){
+        showDeepReadToast('没有可发送的划线内容', 'error');
+        return;
+    }
+
+    const title = (document && document.title) ? document.title : '';
+    const url = window.location.href;
+    const ideaText = String(highlight.text || '').trim();
+
+    const payload = { title, idea: ideaText, url };
+    try{
+        const resp = await chrome.runtime.sendMessage({
+            action: 'deepread_send_feishu_webhook',
+            webhookUrl,
+            payload
+        });
+        if (!resp || !resp.ok) throw new Error(resp && resp.error ? resp.error : 'unknown');
+        showDeepReadToast('已发送', 'success');
+    }catch(err){
+        console.warn('DeepRead: 发送到飞书失败:', err);
+        showDeepReadToast('发送失败', 'error');
+    }
+}
+
+function bindUserHighlightSelectionAndDelete(){
+    document.addEventListener('click', (e) => {
+        const target = e.target;
+        const sp = target && target.closest ? target.closest('.deepread-user-highlight[data-hid]') : null;
+        if (!sp) return;
+
+        const hid = sp.getAttribute('data-hid');
+        if (!hid) return;
+        setSelectedHighlightId(hid);
+
+        const h = (Array.isArray(highlightHistory) ? highlightHistory : []).find(x => x && x.id === hid);
+        setHighlightPreviewText((h && h.text) ? h.text : (sp.textContent || ''), hid);
+
+        // 点击已划线文本时，弹出“划线/解释”按钮，方便直接解释
+        showFloatActionsForExistingHighlight({
+            x: e.pageX,
+            y: e.pageY,
+            highlight: h || { id: hid, paragraphId: sp.getAttribute('data-pid') || null, text: sp.textContent || '' },
+            paragraphId: (h && h.paragraphId) ? h.paragraphId : (sp.getAttribute('data-pid') || null)
+        });
+
+        e.preventDefault();
+        e.stopPropagation();
+    }, true);
+
+    document.addEventListener('click', async (e) => {
+        const sendBtn = e.target && e.target.closest ? e.target.closest('#deepreadMinimapActions .deepread-minimap-send') : null;
+        if (sendBtn){
+            const box = document.getElementById('deepreadMinimapPreview');
+            const hid = box ? (box.getAttribute('data-hid') || '') : '';
+            if (hid){
+                const h = (Array.isArray(highlightHistory) ? highlightHistory : []).find(x => x && x.id === hid);
+                await sendHighlightToFeishu(h);
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
+        const copyBtn = e.target && e.target.closest ? e.target.closest('#deepreadMinimapActions .deepread-minimap-copy') : null;
+        if (copyBtn){
+            const box = document.getElementById('deepreadMinimapPreview');
+            const hid = box ? (box.getAttribute('data-hid') || '') : '';
+            if (hid){
+                const h = (Array.isArray(highlightHistory) ? highlightHistory : []).find(x => x && x.id === hid);
+                await copyHighlightToClipboard(h);
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
+    });
+
+    document.addEventListener('keydown', async (e) => {
+        if (e.key !== 'Backspace' && e.key !== 'Delete') return;
+        if (!selectedHighlightId) return;
+        if (isEditableTarget(e.target)) return;
+        await deleteHighlightById(selectedHighlightId);
+        e.preventDefault();
+        e.stopPropagation();
+    });
+}
+
+function setHighlightPreview(text, hid){
+    const el = document.getElementById('deepreadMinimapPreview');
+    if (!el) return;
+    const safeText = (text || '').toString();
+    const hasId = !!hid;
+    el.setAttribute('data-hid', hasId ? String(hid) : '');
+    el.innerHTML = `
+        <div class="deepread-minimap-preview-text"></div>
+    `;
+    const textEl = el.querySelector('.deepread-minimap-preview-text');
+    if (textEl) textEl.textContent = safeText;
+
+    const sendBtn = document.querySelector('#deepreadMinimapActions .deepread-minimap-send');
+    const copyBtn = document.querySelector('#deepreadMinimapActions .deepread-minimap-copy');
+    if (sendBtn) sendBtn.disabled = !hasId;
+    if (copyBtn) copyBtn.disabled = !hasId;
+}
+
+async function deleteHighlightById(hid){
+    if (!hid) return;
+
+    const span = getUserHighlightElById(hid);
+    if (span) unwrapSpan(span);
+
+    highlightHistory = Array.isArray(highlightHistory) ? highlightHistory : [];
+    highlightHistory = highlightHistory.filter(h => h && h.id !== hid);
+
+    try{
+        await saveHighlightsToCache();
+    }catch(err){
+        console.warn('删除划线缓存失败:', err);
+    }
+
+    setSelectedHighlightId(null);
+    setHighlightPreview('', null);
+
+    updateMinimapUIIfVisible();
+}
+
+function wrapHighlightInParagraph(paragraphEl, highlight){
+    if (!paragraphEl || !highlight) return null;
+    if (typeof highlight.start !== 'number' || typeof highlight.end !== 'number') return null;
+    const fullTextLen = (paragraphEl.textContent || '').length;
+    const s = Math.max(0, Math.min(fullTextLen, highlight.start));
+    const e = Math.max(0, Math.min(fullTextLen, highlight.end));
+    if (e <= s) return null;
+
+    // 覆盖策略：移除与 [s,e) 有重叠的旧划线
+    const spans = Array.from(paragraphEl.querySelectorAll('.deepread-user-highlight[data-hid]'));
+    for (const sp of spans){
+        const spStart = Number(sp.getAttribute('data-start'));
+        const spEnd = Number(sp.getAttribute('data-end'));
+        if (!Number.isFinite(spStart) || !Number.isFinite(spEnd)) continue;
+        const overlap = !(e <= spStart || s >= spEnd);
+        if (overlap) unwrapSpan(sp);
+    }
+
+    const startLoc = nodeAtOffset(paragraphEl, s);
+    const endLoc = nodeAtOffset(paragraphEl, e);
+    if (!startLoc || !endLoc) return null;
+
+    const range = document.createRange();
+    range.setStart(startLoc.node, startLoc.offset);
+    range.setEnd(endLoc.node, endLoc.offset);
+
+    const selectedText = (range.toString() || '').trim();
+    if (!selectedText) return null;
+
+    const span = document.createElement('span');
+    span.className = 'deepread-user-highlight';
+    span.setAttribute('data-hid', highlight.id);
+    span.setAttribute('data-pid', highlight.paragraphId);
+    span.setAttribute('data-start', String(s));
+    span.setAttribute('data-end', String(e));
+
+    const frag = range.extractContents();
+    span.appendChild(frag);
+    range.insertNode(span);
+    return span;
+}
+
+async function saveHighlightsToCache(){
+    if (!window.cacheManager || !window.cacheManager.saveHighlights) return;
+    const url = window.location.href;
+    await window.cacheManager.saveHighlights(url, highlightHistory || []);
+}
+
+function buildHighlightsExportText(){
+    const title = (document && document.title) ? String(document.title).trim() : '';
+    const url = window.location.href;
+    const highlights = (Array.isArray(highlightHistory) ? highlightHistory : [])
+        .filter(h => h && typeof h.text === 'string' && h.text.trim())
+        .map(h => h.text.trim());
+
+    const parts = [];
+    if (title) parts.push(title);
+    parts.push(url);
+    parts.push('');
+    parts.push(...highlights);
+    return parts.join('\n\n');
+}
+
+function downloadTextFile(filename, text){
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+        try{ URL.revokeObjectURL(a.href); }catch{}
+        try{ a.remove(); }catch{}
+    }, 0);
+}
+
+async function deleteAllHighlights(){
+    const ids = (Array.isArray(highlightHistory) ? highlightHistory : []).map(h => h && h.id).filter(Boolean);
+    for (const hid of ids){
+        const span = getUserHighlightElById(hid);
+        if (span) unwrapSpan(span);
+    }
+    highlightHistory = [];
+    selectedHighlightId = null;
+    try{
+        await saveHighlightsToCache();
+    }catch(err){
+        console.warn('清空划线缓存失败:', err);
+    }
+    updateMinimapUIIfVisible({ previewText: '', previewHid: '' });
+}
+
+async function loadHighlightsFromCache(){
+    if (!window.cacheManager || !window.cacheManager.loadHighlights) return [];
+    const url = window.location.href;
+    return await window.cacheManager.loadHighlights(url);
+}
+
+function clearTransientConceptHighlight(){
+    document.querySelectorAll('.deepread-precise-highlight').forEach(el => {
+        unwrapSpan(el);
+    });
+    document.querySelectorAll('.deepread-highlight').forEach(el => {
+        el.classList.remove('deepread-highlight');
+    });
+}
+
+function setHighlightPreviewText(text, hid){
+    setHighlightPreview(text, hid);
+}
+
+function renderHighlightMinimapDots(){
+    const minimap = document.getElementById('deepread-minimap');
+    if (!minimap || minimap.classList.contains('deepread-hidden')) return;
+    const bar = minimap.querySelector('#deepreadMinimapBar');
+    const countEl = minimap.querySelector('#deepreadMinimapCount');
+    const exportBtn = minimap.querySelector('#deepreadMinimapExport');
+    if (!bar) return;
+
+    bar.querySelectorAll('.deepread-minimap-dot').forEach(d => d.remove());
+
+    const highlights = Array.isArray(highlightHistory) ? highlightHistory : [];
+    if (countEl) countEl.textContent = String(highlights.length);
+    if (exportBtn) exportBtn.disabled = highlights.length === 0;
+
+    const docH = Math.max(1, document.documentElement.scrollHeight);
+    const barH = bar.getBoundingClientRect().height || 1;
+    const topPad = 10;
+    const bottomPad = 14;
+    const usableH = Math.max(1, barH - topPad - bottomPad);
+
+    for (const h of highlights){
+        if (!h || !h.paragraphId) continue;
+        const el = findParagraphEl(h.paragraphId);
+        if (!el) continue;
+        const top = el.getBoundingClientRect().top + window.scrollY;
+        const ratio = Math.max(0, Math.min(1, top / docH));
+        const topPx = Math.round(topPad + ratio * usableH);
+
+        const dot = document.createElement('div');
+        dot.className = 'deepread-minimap-dot';
+        dot.setAttribute('data-hid', h.id);
+        dot.style.background = 'rgba(76, 175, 80, 0.95)';
+        dot.style.top = `${Math.max(topPad, Math.min(barH - bottomPad, topPx))}px`;
+
+        // hover: 仅预览，不跳转
+        dot.addEventListener('mouseenter', () => {
+            setHighlightPreviewText(h.text || '', h.id);
+        });
+
+        dot.addEventListener('mouseleave', () => {
+            if (selectedHighlightId){
+                const cur = (Array.isArray(highlightHistory) ? highlightHistory : []).find(x => x && x.id === selectedHighlightId);
+                setHighlightPreviewText((cur && cur.text) ? cur.text : '', selectedHighlightId);
+            } else {
+                setHighlightPreviewText('', '');
+            }
+        });
+
+        dot.addEventListener('click', () => {
+            const target = findParagraphEl(h.paragraphId);
+            if (target){
+                target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            setSelectedHighlightId(h.id);
+            setHighlightPreviewText(h.text || '', h.id);
+            clearTransientConceptHighlight();
+        });
+
+        bar.appendChild(dot);
+    }
+}
+
+async function restoreHighlightsFromCacheAndRender(){
+    // 1) load cache -> memory
+    const cached = await loadHighlightsFromCache();
+    if (Array.isArray(cached)) highlightHistory = cached;
+
+    // 1.5) 确保 paragraph-* 体系可定位（在不打开右侧面板时也能恢复高亮/dots）
+    await ensureParagraphIdsReadyForHighlights(highlightHistory);
+
+    // 2) restore DOM wraps
+    for (const h of (highlightHistory || [])){
+        if (!h || !h.id || !h.paragraphId) continue;
+        if (getUserHighlightElById(h.id)) continue; // avoid double wrap
+        const paragraphEl = findParagraphEl(h.paragraphId);
+        if (!paragraphEl) continue;
+        try{
+            wrapHighlightInParagraph(paragraphEl, h);
+        }catch(err){
+            console.warn('恢复单条划线失败:', h && h.id, err);
+        }
+    }
+
+    renderHighlightMinimapDots();
+    updateDeepReadMinimapViewport();
+}
+// Highlight 控制函数结束
+
+
 // 初始化 注意：不要再这个init方法里自动展开面板，
 // 这会导致打开新页面或页面刷新时，助手（作为chrome插件）自动打开，对用户体验不好
 // 只有用户主动点击助手进行操作时，才打开面板，
@@ -98,12 +679,31 @@ async function init() {
     
     // 设置清除缓存的快捷键
     setupClearCacheShortcut();
+
+    // 绑定划线选中/删除（防止重复绑定）
+    if (!window.__deepreadUserHighlightDeleteBound){
+        try{
+            bindUserHighlightSelectionAndDelete();
+            window.__deepreadUserHighlightDeleteBound = true;
+        }catch(err){
+            console.warn('DeepRead: 绑定划线删除事件失败:', err);
+        }
+    }
+
+    if (!window.__deepreadSelectionListenerBound){
+        try{
+            addTextSelectionListener();
+            window.__deepreadSelectionListenerBound = true;
+        }catch(err){
+            console.warn('DeepRead: 绑定文本选择浮窗失败:', err);
+        }
+    }
     
     // 从缓存加载数据
     if (window.cacheManager) {
         try {
             // 获取当前页面URL
-            // const currentUrl = window.location.href;
+            const currentUrl = window.location.href;
             
             // 加载概念查询历史
             const cachedConceptHistory = await window.cacheManager.loadConceptHistory();
@@ -118,6 +718,18 @@ async function init() {
             if (cachedChatHistory && cachedChatHistory.length > 0) {
                 chatHistory = cachedChatHistory;
                 debugLog(`从缓存加载了 ${chatHistory.length} 条聊天记录`);
+            }
+
+            // 加载用户划线（仅加载到内存；恢复 DOM 在面板打开时执行）
+            const cachedHighlights = await window.cacheManager.loadHighlights(currentUrl);
+            if (cachedHighlights && cachedHighlights.length > 0) {
+                highlightHistory = cachedHighlights;
+                debugLog(`从缓存加载了 ${highlightHistory.length} 条划线记录`);
+            }
+
+            // 左侧 minimap 一旦打开后常驻：若之前 pinned，则页面刷新后自动恢复显示
+            if (isDeepReadMinimapPinned()){
+                showDeepReadMinimapPinned(true);
             }
             
             // 加载页面内容
@@ -439,6 +1051,7 @@ function createDeepReadPanel() {
     navIndicator.className = 'deepread-nav-indicator';
     navIndicator.style.display = 'none';
     document.body.appendChild(navIndicator);
+    ensureDeepReadMinimap();
     console.log('DeepRead panel created.');
 }
 
@@ -469,14 +1082,308 @@ function toggleDeepReadPanel() {
     // 切换面板显示状态
     if (container) {
         container.classList.toggle('deepread-hidden');
+        // 右侧面板开闭与左侧 minimap 解耦：minimap 一旦打开即常驻，不随右侧隐藏
+        if (!container.classList.contains('deepread-hidden')){
+            showDeepReadMinimapPinned(true);
+        }
         if (container.classList.contains('deepread-hidden')) {
-            debugLog('隐藏面板');
+            debugLog('隐藏DeepRead面板');
         } else {
-            debugLog('显示面板');
+            debugLog('显示DeepRead面板');
         }
     } else {
         console.error('面板显示失败');
     }
+}
+
+function ensureDeepReadMinimap(){
+    let el = document.getElementById('deepread-minimap');
+    if (el) return el;
+
+    el = document.createElement('div');
+    el.id = 'deepread-minimap';
+    el.className = 'deepread-minimap deepread-hidden';
+    el.setAttribute('aria-label', 'DeepRead 卡尺');
+    el.innerHTML = `
+        <div class="deepread-minimap-pan" id="deepreadMinimapPan" title="拖动窗口"></div>
+        <div class="deepread-minimap-actions" id="deepreadMinimapActions">
+            <button class="deepread-minimap-export" id="deepreadMinimapExport" title="导出全部划线" disabled>导出划线<span class="deepread-minimap-count" id="deepreadMinimapCount">—</span></button>
+            <button class="deepread-minimap-send" type="button" title="发送到飞书" disabled>发送</button>
+            <button class="deepread-minimap-copy" type="button" title="复制文本内容" disabled>复制</button>
+        </div>
+        <div class="deepread-minimap-preview" id="deepreadMinimapPreview" title="划线预览"></div>
+        <div class="deepread-minimap-bar" id="deepreadMinimapBar" title="划线微缩">
+            <div class="deepread-minimap-rail"></div>
+            <div class="deepread-minimap-view" id="deepreadMinimapView"></div>
+        </div>
+    `;
+    document.body.appendChild(el);
+
+    const exportBtn = document.getElementById('deepreadMinimapExport');
+    if (exportBtn){
+        exportBtn.disabled = true;
+        exportBtn.addEventListener('click', async () => {
+            const highlights = Array.isArray(highlightHistory) ? highlightHistory : [];
+            if (!highlights.length){
+                showDeepReadToast('没有可导出的划线', 'error');
+                return;
+            }
+
+            const shouldClear = confirm('导出划线：\n\n【确定】导出后清空并删除记录\n【取消】仅导出');
+            const content = buildHighlightsExportText();
+            const safeTitle = ((document && document.title) ? String(document.title) : '').replace(/[\\/:*?"<>|]+/g, ' ').trim();
+            const date = new Date();
+            const stamp = `${date.getFullYear()}${String(date.getMonth()+1).padStart(2,'0')}${String(date.getDate()).padStart(2,'0')}`;
+            const filename = `${safeTitle || 'DeepRead'}-highlights-${stamp}.txt`;
+            downloadTextFile(filename, content);
+
+            if (shouldClear){
+                await deleteAllHighlights();
+                showDeepReadToast('已导出并清空', 'success');
+            } else {
+                showDeepReadToast('已导出', 'success');
+            }
+        });
+    }
+
+    restoreDeepReadMinimapX();
+    bindDeepReadMinimapPan();
+
+    // 滚动/缩放更新 viewport
+    window.addEventListener('scroll', updateDeepReadMinimapViewport, { passive: true });
+    window.addEventListener('resize', () => {
+        renderHighlightMinimapDots();
+        updateDeepReadMinimapViewport();
+    });
+
+    return el;
+}
+
+function getDeepReadMinimapX(){
+    const raw = getComputedStyle(document.documentElement).getPropertyValue('--deepread-minimap-x');
+    const v = parseInt(String(raw || '').trim(), 10);
+    return Number.isFinite(v) ? v : 0;
+}
+
+function setDeepReadMinimapX(px){
+    const x = Math.round(Number(px) || 0);
+    document.documentElement.style.setProperty('--deepread-minimap-x', `${x}px`);
+    try{
+        localStorage.setItem('deepread_minimap_x', String(x));
+    }catch{}
+}
+
+function restoreDeepReadMinimapX(){
+    try{
+        const v = parseInt(localStorage.getItem('deepread_minimap_x') || '', 10);
+        if (Number.isFinite(v)) setDeepReadMinimapX(v);
+    }catch{}
+}
+
+function bindDeepReadMinimapPan(){
+    const pan = document.getElementById('deepreadMinimapPan');
+    const card = document.getElementById('deepread-minimap');
+    if (!pan || !card) return;
+
+    let dragging = false;
+    let startX = 0;
+    let startOffset = 0;
+    let minOffset = null;
+    let maxOffset = null;
+
+    pan.addEventListener('pointerdown', (e) => {
+        dragging = true;
+        startX = e.clientX;
+        startOffset = getDeepReadMinimapX();
+
+        const rect = card.getBoundingClientRect();
+        const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+
+        // 允许在视口内拖动：左边不小于 8px，右边不超过 vw-8px
+        const canMoveLeft = rect.left - 8;
+        const canMoveRight = (vw - 8) - rect.right;
+        minOffset = startOffset - canMoveLeft;
+        maxOffset = startOffset + canMoveRight;
+
+        try{ pan.setPointerCapture(e.pointerId); }catch{}
+        e.preventDefault();
+        e.stopPropagation();
+    });
+
+    pan.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        const dx = e.clientX - startX;
+        let next = startOffset + dx;
+        if (typeof minOffset === 'number') next = Math.max(minOffset, next);
+        if (typeof maxOffset === 'number') next = Math.min(maxOffset, next);
+        setDeepReadMinimapX(next);
+    });
+
+    function endDrag(){
+        dragging = false;
+        minOffset = null;
+        maxOffset = null;
+    }
+
+    pan.addEventListener('pointerup', endDrag);
+    pan.addEventListener('pointercancel', endDrag);
+}
+
+function getClosestParagraphIdFromNode(node){
+    if (!node) return null;
+    let el = (node.nodeType === Node.ELEMENT_NODE) ? node : node.parentElement;
+    if (!el) return null;
+
+    // 优先直接找 data-dr-paragraph-id / id
+    const direct = el.closest('[data-dr-paragraph-id], [id^="paragraph-"]');
+    if (!direct) return null;
+
+    return direct.getAttribute('data-dr-paragraph-id') || direct.id || null;
+}
+
+function getClosestParagraphElement(node){
+    if (!node) return null;
+    let el = (node.nodeType === Node.ELEMENT_NODE) ? node : node.parentElement;
+    if (!el) return null;
+
+    const direct = el.closest('[data-dr-paragraph-id], [id^="paragraph-"]');
+    if (direct) return direct;
+
+    // 真实网页兼容：正文段落常见是 p/li/blockquote/pre/h1-h6，并且可能自带非 paragraph-* 的 id
+    const fallback = el.closest('p, li, blockquote, pre, h1, h2, h3, h4, h5, h6');
+    if (!fallback) return null;
+
+    // 补齐 data-dr-paragraph-id：优先复用现有 id；如果没有 id，则生成一个
+    if (!fallback.getAttribute('data-dr-paragraph-id')){
+        if (fallback.id){
+            fallback.setAttribute('data-dr-paragraph-id', fallback.id);
+        } else {
+            const autoId = `paragraph-auto-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            fallback.id = autoId;
+            fallback.setAttribute('data-dr-paragraph-id', autoId);
+        }
+    }
+    return fallback;
+}
+
+function getTextNodesIn(el){
+    const nodes = [];
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
+    let n;
+    while ((n = walker.nextNode())) nodes.push(n);
+    return nodes;
+}
+
+function calcOffsetWithinParagraph(paragraphEl, range){
+    if (!paragraphEl || !range) return null;
+    try{
+        const rStart = document.createRange();
+        rStart.selectNodeContents(paragraphEl);
+        rStart.setEnd(range.startContainer, range.startOffset);
+        const start = rStart.toString().length;
+
+        const rEnd = document.createRange();
+        rEnd.selectNodeContents(paragraphEl);
+        rEnd.setEnd(range.endContainer, range.endOffset);
+        const end = rEnd.toString().length;
+
+        return { start, end, text: range.toString() };
+    }catch{
+        return null;
+    }
+}
+
+function nodeAtOffset(el, targetOffset){
+    const nodes = getTextNodesIn(el);
+    let acc = 0;
+    for (const n of nodes){
+        const len = n.nodeValue.length;
+        if (targetOffset <= acc + len){
+            return { node: n, offset: Math.max(0, targetOffset - acc) };
+        }
+        acc += len;
+    }
+    if (nodes.length === 0) return null;
+    const last = nodes[nodes.length - 1];
+    return { node: last, offset: last.nodeValue.length };
+}
+
+function setDeepReadHighlightByParagraphId(paragraphId){
+    if (!paragraphId) return;
+    const target = (typeof findByIdEverywhere === 'function') ? findByIdEverywhere(paragraphId) : document.getElementById(paragraphId);
+    if (!target) return;
+
+    document.querySelectorAll('.deepread-highlight').forEach(el => {
+        el.classList.remove('deepread-highlight');
+    });
+    target.classList.add('deepread-highlight');
+}
+
+function setDeepReadHighlightByAnchor(anchor){
+    if (!anchor || !anchor.paragraphId) return;
+    const paragraphEl = (typeof findByIdEverywhere === 'function') ? findByIdEverywhere(anchor.paragraphId) : document.getElementById(anchor.paragraphId);
+    if (!paragraphEl) return;
+
+    // 清除旧高亮
+    document.querySelectorAll('.deepread-highlight, .deepread-precise-highlight').forEach(el => {
+        if (el.classList.contains('deepread-precise-highlight')){
+            const text = document.createTextNode(el.textContent || '');
+            el.replaceWith(text);
+        } else {
+            el.classList.remove('deepread-highlight');
+        }
+    });
+
+    // 如果有精确 offsets，则精确 wrap
+    if (typeof anchor.start === 'number' && typeof anchor.end === 'number'){
+        try{
+            const startLoc = nodeAtOffset(paragraphEl, anchor.start);
+            const endLoc = nodeAtOffset(paragraphEl, anchor.end);
+            if (startLoc && endLoc){
+                const range = document.createRange();
+                range.setStart(startLoc.node, startLoc.offset);
+                range.setEnd(endLoc.node, endLoc.offset);
+                const span = document.createElement('span');
+                span.className = 'deepread-precise-highlight';
+                const frag = range.extractContents();
+                span.appendChild(frag);
+                range.insertNode(span);
+                return;
+            }
+        }catch(err){
+            console.warn('精确高亮失败，降级到段落级:', err);
+        }
+    }
+
+    // 降级：段落级高亮
+    paragraphEl.classList.add('deepread-highlight');
+}
+
+function renderConceptMinimapDots(){
+    // 已按设计将左侧 minimap 专用于“用户划线/高亮”。
+    // 保留该函数以避免历史调用导致报错，但不再渲染 concept dots。
+    return;
+}
+
+function updateDeepReadMinimapViewport(){
+    const minimap = document.getElementById('deepread-minimap');
+    if (!minimap || minimap.classList.contains('deepread-hidden')) return;
+    const bar = minimap.querySelector('#deepreadMinimapBar');
+    const view = minimap.querySelector('#deepreadMinimapView');
+    if (!bar || !view) return;
+
+    const docH = Math.max(1, document.documentElement.scrollHeight);
+    const barH = bar.getBoundingClientRect().height || 1;
+    const topPad = 10;
+    const bottomPad = 14;
+    const usableH = Math.max(1, barH - topPad - bottomPad);
+
+    const topRatio = window.scrollY / docH;
+    const viewRatio = window.innerHeight / docH;
+    const topPx = Math.round(topPad + topRatio * usableH);
+    const hPx = Math.max(18, Math.round(viewRatio * usableH));
+    view.style.top = `${Math.max(topPad, Math.min(barH - bottomPad, topPx))}px`;
+    view.style.height = `${Math.max(18, Math.min(barH - topPad - bottomPad, hPx))}px`;
 }
 
 // createDeepReadPanel -> initResizeHandlers 初始化拖动功能(窗口变宽)
@@ -716,6 +1623,24 @@ function addTextSelectionListener() {
     document.addEventListener('mouseup', function(event) {
         const selection = window.getSelection();
         const selectedText = selection.toString().trim();
+
+        lastSelectionRange = null;
+        lastSelectionParagraphId = null;
+        lastSelectionOffsets = null;
+        try{
+            if (selection && selection.rangeCount > 0){
+                lastSelectionRange = selection.getRangeAt(0).cloneRange();
+                const paragraphEl = getClosestParagraphElement(lastSelectionRange.commonAncestorContainer);
+                if (paragraphEl){
+                    lastSelectionParagraphId = paragraphEl.getAttribute('data-dr-paragraph-id') || paragraphEl.id || null;
+                    lastSelectionOffsets = calcOffsetWithinParagraph(paragraphEl, lastSelectionRange);
+                }
+            }
+        }catch{
+            lastSelectionRange = null;
+            lastSelectionParagraphId = null;
+            lastSelectionOffsets = null;
+        }
         
         if (selectedText && selectedText.length > 1) { // 至少选择2个字符
             // debugLog('选中文本: ' + selectedText);
@@ -728,11 +1653,14 @@ function addTextSelectionListener() {
                 }
             });
             
-            // 创建浮动按钮
+            // 创建浮动按钮组：划线 / 解释
             const floatButton = document.createElement('div');
             floatButton.className = 'deepread-float-button';
-            floatButton.textContent = 'DR';
-            floatButton.title = '深度阅读该概念';
+            floatButton.title = 'DeepRead';
+            floatButton.innerHTML = `
+                <button class="deepread-float-action deepread-float-highlight" type="button" title="划线">划线</button>
+                <button class="deepread-float-action deepread-float-explain" type="button" title="解释">解释</button>
+            `;
             
             // 定位浮动按钮到鼠标位置
             floatButton.style.left = (event.pageX + 10) + 'px';
@@ -749,20 +1677,129 @@ function addTextSelectionListener() {
                 e.preventDefault();
             });
             
-            // 添加点击事件
-            floatButton.addEventListener('click', function(e) {
-                e.stopPropagation();
-                e.preventDefault();
-                debugLog('点击了浮动按钮，选中文本: ' + selectedText);
-                
-                // 移除浮动按钮
-                if (document.body.contains(floatButton)) {
-                    document.body.removeChild(floatButton);
-                }
-                
-                // 打开阅读助手并跳转到相应词条
-                openDeepReadWithConcept(selectedText);
-            });
+            const btnHighlight = floatButton.querySelector('.deepread-float-highlight');
+            const btnExplain = floatButton.querySelector('.deepread-float-explain');
+
+            if (btnHighlight){
+                btnHighlight.addEventListener('click', async function(e) {
+                    e.stopPropagation();
+                    e.preventDefault();
+
+                    console.log('[DeepRead][HighlightClick] clicked');
+                    console.log('[DeepRead][HighlightClick] lastSelectionParagraphId:', lastSelectionParagraphId);
+                    console.log('[DeepRead][HighlightClick] lastSelectionOffsets:', lastSelectionOffsets);
+                    console.log('[DeepRead][HighlightClick] selectedText(mouseup):', selectedText);
+
+                    // 移除浮动按钮
+                    if (document.body.contains(floatButton)) {
+                        document.body.removeChild(floatButton);
+                    }
+
+                    // 划线：仅限同段落，且必须能算出 offsets
+                    if (!lastSelectionParagraphId || !lastSelectionOffsets) {
+                        console.warn('[DeepRead][HighlightClick] abort: missing paragraphId or offsets');
+                        return;
+                    }
+                    const { start, end } = normalizeRangeOffsets(lastSelectionOffsets.start, lastSelectionOffsets.end);
+                    console.log('[DeepRead][HighlightClick] normalized offsets:', { start, end });
+                    if (end <= start) {
+                        console.warn('[DeepRead][HighlightClick] abort: end <= start');
+                        return;
+                    }
+
+                    const paragraphEl = findParagraphEl(lastSelectionParagraphId);
+                    if (!paragraphEl) {
+                        console.warn('[DeepRead][HighlightClick] abort: paragraphEl not found for id:', lastSelectionParagraphId);
+                        return;
+                    }
+                    console.log('[DeepRead][HighlightClick] paragraphEl:', paragraphEl);
+                    console.log('[DeepRead][HighlightClick] paragraphEl.tagName:', paragraphEl.tagName);
+                    console.log('[DeepRead][HighlightClick] paragraphEl.textContent.length:', (paragraphEl.textContent || '').length);
+
+                    const highlight = {
+                        id: generateHighlightId(),
+                        url: window.location.href,
+                        paragraphId: lastSelectionParagraphId,
+                        start,
+                        end,
+                        text: (lastSelectionOffsets.text || selectedText || '').trim(),
+                        createdAt: Date.now()
+                    };
+
+                    console.log('[DeepRead][HighlightClick] highlight obj:', highlight);
+
+                    highlightHistory = Array.isArray(highlightHistory) ? highlightHistory : [];
+                    highlightHistory.push(highlight);
+                    console.log('[DeepRead][HighlightClick] highlightHistory.length:', highlightHistory.length);
+
+                    try{
+                        const span = wrapHighlightInParagraph(paragraphEl, highlight);
+                        console.log('[DeepRead][HighlightClick] wrap result span:', span);
+                    }catch(err){
+                        console.warn('划线包裹失败:', err);
+                    }
+
+                    try{
+                        await saveHighlightsToCache();
+                        console.log('[DeepRead][HighlightClick] saved highlights to cache');
+                    }catch(err){
+                        console.warn('划线缓存失败:', err);
+                    }
+
+                    // 只要用户成功划线，就自动展开左侧 minimap（与右侧面板解耦）
+                    // 这里传 false，避免触发 restore 导致重复 wrap
+                    showDeepReadMinimapPinned(false);
+
+                    // 左侧 minimap 独立：只要可见就刷新 dots + 预览（不依赖右侧面板）
+                    setSelectedHighlightId(highlight.id);
+                    updateMinimapUIIfVisible({ previewText: highlight.text || '', previewHid: highlight.id });
+                });
+            }
+
+            if (btnExplain){
+                btnExplain.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    debugLog('点击了解释，选中文本: ' + selectedText);
+
+                    // 移除浮动按钮
+                    if (document.body.contains(floatButton)) {
+                        document.body.removeChild(floatButton);
+                    }
+
+                    if (!pageAnalyzed){
+                        if (!document.getElementById('deepread-container')) {
+                            createDeepReadPanel();
+                        }
+                        const container = document.getElementById('deepread-container');
+                        if (container) {
+                            container.classList.remove('deepread-hidden');
+                        }
+                        if (!window.__deepreadExplainGuideShownForUrl || window.__deepreadExplainGuideShownForUrl !== window.location.href){
+                            window.__deepreadExplainGuideShownForUrl = window.location.href;
+                            try{
+                                extractPageContent();
+                            }catch(err){
+                                console.warn('DeepRead: 解释前引导分析失败:', err);
+                            }
+                        } else {
+                            try{
+                                if (pageContent) viewTextEditor(pageContent);
+                            }catch{}
+                        }
+                        return;
+                    }
+
+                    // 解释：保持旧逻辑（不产生划线）
+                    const anchorData = { paragraphId: lastSelectionParagraphId };
+                    if (lastSelectionOffsets){
+                        anchorData.start = lastSelectionOffsets.start;
+                        anchorData.end = lastSelectionOffsets.end;
+                        anchorData.text = lastSelectionOffsets.text;
+                    }
+                    openDeepReadWithConcept(selectedText, anchorData);
+                });
+            }
             
             // 添加到页面
             document.body.appendChild(floatButton);
@@ -2432,9 +3469,15 @@ function showAnalysisResults(analysisResult) {
                     // console.log('paragraph', paragraph);
                     // const preview = paragraph.textContent.trim();
                     // const clipped = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
-                    // <p>${clipped}</p>
+                    const score = getParagraphStrength(paragraphId);
+                    const pct = Math.round(clamp01(score) * 100);
+                    const color = deepreadHeatColor(score);
                     keyParagraphsHtml += `
                         <div class="deepread-key-paragraph deepread-paragraph-item" data-target="${paragraphId}">
+                            <div class="deepread-strength-row">
+                                <span class="deepread-strength-text">相关度 ${pct}%</span>
+                            </div>
+                            <div class="deepread-heat"><div class="deepread-heat-fill" style="width:${pct}%;background:${color}"></div></div>
                             ${reason ? `<p class="deepread-paragraph-reason"><strong>${reason}</strong></p>` : ''}
                             <button class="deepread-navigate-btn">跳转到此</button>
                             <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
@@ -2689,10 +3732,38 @@ function getConceptKey(conceptName) {
     }
 }
 
+function clamp01(x){
+    if (typeof x !== 'number' || Number.isNaN(x)) return 0;
+    return Math.max(0, Math.min(1, x));
+}
+
+function deepreadHeatColor(score){
+    const t = clamp01(score);
+    const hue = 120 * (1 - t);
+    return `hsl(${hue}, 85%, 55%)`;
+}
+
+function getParagraphStrength(paragraphId){
+    // 先用稳定的伪随机值（避免每次渲染都跳变）；后续替换为 LLM 返回分数
+    if (!paragraphId) return 0;
+    try{
+        const hash = (window.cacheManager && window.cacheManager.hashString)
+            ? window.cacheManager.hashString(String(paragraphId))
+            : String(paragraphId);
+        let acc = 0;
+        for (let i = 0; i < hash.length; i++){
+            acc = (acc * 31 + hash.charCodeAt(i)) >>> 0;
+        }
+        return (acc % 1000) / 1000;
+    }catch{
+        return Math.random();
+    }
+}
+
 // 划词 打开阅读助手并跳转到解释指定概念 - 已合并到explainConcept函数
-async function openDeepReadWithConcept(conceptName) {
+async function openDeepReadWithConcept(conceptName, options = {}) {
     // 直接调用explainConcept函数，传入null作为element参数
-    await explainConcept(conceptName, null);
+    await explainConcept(conceptName, null, options);
 }
 
 /**
@@ -2700,7 +3771,7 @@ async function openDeepReadWithConcept(conceptName) {
  * @param {string} conceptName 概念名称
  * @param {HTMLElement} element 概念所在的HTML元素
  */
-async function explainConcept(conceptName, element) {
+async function explainConcept(conceptName, element, options = {}) {
     // 使用哈希处理后的概念名称作为动作键
     const conceptKey = getConceptKey(conceptName);
     const actionKey = `explain_concept_${conceptKey}`;
@@ -2746,17 +3817,25 @@ async function explainConcept(conceptName, element) {
                 
                 // 设置当前索引为已存在概念的位置
                 currentConceptIndex = existingConceptIndex;
-                debugLog(`当前概念已存在于缓存中，索引为: ${currentConceptIndex}`);
-                
-                // 即使使用缓存，也要确保元素的高亮状态被正确处理
-                if (element) {
-                    // 移除所有已有的高亮样式
-                    document.querySelectorAll('.deepread-concept-active').forEach(el => {
-                        el.classList.remove('deepread-concept-active');
-                    });
-                    // 添加新的高亮样式
-                    element.classList.add('deepread-concept-active');
+
+                // 如果本次是从正文选区触发（有 paragraphId），则把定位信息补齐/更新到历史记录中
+                if (options && options.paragraphId) {
+                    conceptHistory[existingConceptIndex].anchor = conceptHistory[existingConceptIndex].anchor || {};
+                    conceptHistory[existingConceptIndex].anchor.paragraphId = options.paragraphId;
+                    if (typeof options.start === 'number') conceptHistory[existingConceptIndex].anchor.start = options.start;
+                    if (typeof options.end === 'number') conceptHistory[existingConceptIndex].anchor.end = options.end;
+                    if (options.text) conceptHistory[existingConceptIndex].anchor.text = options.text;
+                    conceptHistory[existingConceptIndex].anchor.url = window.location.href;
+                    if (window.cacheManager) {
+                        window.cacheManager.saveConceptHistory(conceptHistory)
+                            .catch(error => console.error('更新概念定位信息到缓存失败:', error));
+                    }
                 }
+
+                // 命中缓存：直接更新UI并返回（避免重复调用 LLM）
+                debugLog('explainConcept 命中缓存，调用 updateExplanationArea');
+                updateExplanationArea(conceptName, processedResponse, displayName, conceptKey);
+                return;
             } else {
                 // 如果不存在，调用LLM API获取概念解释
                 debugLog(`概念"${displayName}"不在缓存中，调用LLM获取解释`);
@@ -2799,7 +3878,14 @@ async function explainConcept(conceptName, element) {
                     displayName: displayName,    // 缩略后的显示名称
                     conceptKey: conceptKey,      // 哈希处理后的概念键
                     response: processedResponse,  // 使用response而非explanation以保持一致性
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    anchor: {
+                        paragraphId: options && options.paragraphId ? options.paragraphId : null,
+                        start: options && typeof options.start === 'number' ? options.start : undefined,
+                        end: options && typeof options.end === 'number' ? options.end : undefined,
+                        text: options && options.text ? options.text : undefined,
+                        url: window.location.href
+                    }
                 };
                 conceptHistory.push(conceptData);
                 // 设置当前索引为最新的概念
@@ -3049,8 +4135,15 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
             if (paragraph) {
                 // const preview = paragraph.textContent.trim();
                 // const clipped = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
+                const score = getParagraphStrength(paragraphId);
+                const pct = Math.round(clamp01(score) * 100);
+                const color = deepreadHeatColor(score);
                 relatedParagraphsHtml += `
                     <div class="deepread-related-content deepread-paragraph-item" data-target="${paragraphId}">
+                        <div class="deepread-strength-row">
+                            <span class="deepread-strength-text">相关度 ${pct}%</span>
+                        </div>
+                        <div class="deepread-heat"><div class="deepread-heat-fill" style="width:${pct}%;background:${color}"></div></div>
                         ${reason ? `<p class="deepread-paragraph-reason"><strong>${reason}</strong></p>` : ''}
                         <button class="deepread-navigate-btn">跳转到此</button>
                         <button class="deepread-navigate-btn deepread-explain-btn">解释此段</button>
@@ -4831,10 +5924,14 @@ function createSettingsPanel() {
     
     // 获取当前保存的API Key和MODEL
     let savedApiKey = '';
+    let savedFeishuWebhookUrl = '';
+    try{
+        savedFeishuWebhookUrl = (localStorage.getItem('deepread_feishu_webhook_url') || '').trim();
+    }catch{}
     
     // 使用Chrome存储API获取设置
     if (isExtensionEnvironment && chrome.storage) {
-        chrome.storage.sync.get(['deepread_api_key', 'deepread_model', 'deepread_thinking_level'], function(result) {
+        chrome.storage.sync.get(['deepread_api_key', 'deepread_model', 'deepread_thinking_level', 'deepread_feishu_webhook_url'], function(result) {
             if (result.deepread_api_key) {
                 document.getElementById('deepread-api-key').value = result.deepread_api_key;
             }
@@ -4859,6 +5956,12 @@ function createSettingsPanel() {
                 const levelMap = { 'MINIMAL': 0, 'LOW': 1, 'MEDIUM': 2, 'HIGH': 3 };
                 thinkingSlider.value = levelMap[result.deepread_thinking_level] || 0;
                 thinkingValue.textContent = result.deepread_thinking_level;
+            }
+            if (result.deepread_feishu_webhook_url) {
+                const v = String(result.deepread_feishu_webhook_url || '').trim();
+                try{ localStorage.setItem('deepread_feishu_webhook_url', v); }catch{}
+                const input = document.getElementById('deepread-feishu-webhook-url');
+                if (input) input.value = v;
             }
         });
     }
@@ -4903,6 +6006,14 @@ function createSettingsPanel() {
                 <p id="deepread-settings-cache-desc">DeepRead会保存您的聊天历史和概念查询记录，以便您下次打开时继续使用。</p>
             </div>
             <button id="deepread-clear-cache" class="deepread-btn deepread-btn-danger">清除所有缓存</button>
+        </div>
+        <div class="deepread-settings-section">
+            <h3 id="deepread-settings-title-feishu">飞书</h3>
+            <div class="deepread-settings-item">
+                <label for="deepread-feishu-webhook-url">Feishu Webhook URL</label>
+                <input type="text" id="deepread-feishu-webhook-url" class="deepread-settings-input" 
+                       value="${savedFeishuWebhookUrl}" placeholder="https://www.feishu.cn/flow/api/trigger-webhook/...">
+            </div>
         </div>
     `;
     
@@ -4962,6 +6073,7 @@ function createSettingsPanel() {
 // 保存设置
 function saveSettings(shouldRefresh = false) {
     const apiKey = document.getElementById('deepread-api-key').value.trim();
+    const feishuWebhookUrl = (document.getElementById('deepread-feishu-webhook-url')?.value || '').trim();
     
     // 获取模型设置
     const modelSelect = document.getElementById('deepread-model-select');
@@ -4981,15 +6093,18 @@ function saveSettings(shouldRefresh = false) {
         chrome.storage.sync.set({
             deepread_api_key: apiKey,
             deepread_model: modelId,
-            deepread_thinking_level: thinkingLevel
+            deepread_thinking_level: thinkingLevel,
+            deepread_feishu_webhook_url: feishuWebhookUrl
         }, function() {
             debugLog('设置已保存到Chrome存储: API Key, MODEL=' + modelId + ', thinkingLevel=' + thinkingLevel);
         });
+        try{ localStorage.setItem('deepread_feishu_webhook_url', feishuWebhookUrl); }catch{}
     } else {
         // 如果不是在扩展环境中，使用localStorage作为后备
         localStorage.setItem('deepread_api_key', apiKey);
         localStorage.setItem('deepread_model', modelId);
         localStorage.setItem('deepread_thinking_level', thinkingLevel);
+        localStorage.setItem('deepread_feishu_webhook_url', feishuWebhookUrl);
     }
     
     // 显示保存成功提示

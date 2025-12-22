@@ -7,6 +7,7 @@ const CACHE_KEYS = {
     CONCEPT_HISTORY: 'deepread_concept_history', // 概念解析缓存
     CHAT_HISTORY: 'deepread_chat_history', // 对话缓存
     CURRENT_CONCEPT_INDEX: 'deepread_current_concept_index',
+    HIGHLIGHTS: 'deepread_highlights', // 用户划线缓存（按 URL 分桶）
     PAGE_ANALYZED_STATUS: 'deepread_page_analyzed_status', // 页面分析状态缓存
     URL_INDEX: 'deepread_url_index' // URL索引缓存
 };
@@ -107,6 +108,49 @@ async function loadChatHistory() {
         return chatHistory;
     } catch (error) {
         console.error('加载聊天历史失败:', error);
+        return [];
+    }
+}
+
+/**
+ * 缓存指定 URL 的用户划线
+ * @param {string} url 页面 URL
+ * @param {Array} highlights 划线数组
+ */
+async function saveHighlights(url, highlights) {
+    try {
+        const currentUrl = url || (window && window.location ? window.location.href : null);
+        if (!currentUrl) {
+            console.error('缓存划线失败: 缺少URL');
+            return;
+        }
+        const urlBasedKey = getUrlBasedKey(CACHE_KEYS.HIGHLIGHTS, currentUrl);
+        await chrome.storage.local.set({ [urlBasedKey]: highlights || [] });
+        console.log('划线已缓存:', currentUrl, (highlights || []).length);
+    } catch (error) {
+        console.error('缓存划线失败:', error);
+    }
+}
+
+/**
+ * 从缓存加载指定 URL 的用户划线
+ * @param {string} url 页面 URL
+ * @returns {Promise<Array>} 划线数组
+ */
+async function loadHighlights(url) {
+    try {
+        const currentUrl = url || (window && window.location ? window.location.href : null);
+        if (!currentUrl) {
+            console.error('加载划线失败: 缺少URL');
+            return [];
+        }
+        const urlBasedKey = getUrlBasedKey(CACHE_KEYS.HIGHLIGHTS, currentUrl);
+        const result = await chrome.storage.local.get([urlBasedKey]);
+        const highlights = result[urlBasedKey] || [];
+        console.log('从缓存加载划线', highlights);
+        return highlights;
+    } catch (error) {
+        console.error('加载划线失败:', error);
         return [];
     }
 }
@@ -332,6 +376,11 @@ async function clearAllCache() {
                 keysToRemove.push(key);
                 // console.log('添加页面内容缓存键到删除列表:', key);
             }
+
+            // 删除所有以HIGHLIGHTS开头的键
+            if (key.startsWith(CACHE_KEYS.HIGHLIGHTS)) {
+                keysToRemove.push(key);
+            }
             
             // 删除所有以PAGE_ANALYZED_STATUS开头的键
             if (key.startsWith(CACHE_KEYS.PAGE_ANALYZED_STATUS)) {
@@ -415,6 +464,8 @@ window.cacheManager = {
     hashString,
     saveChatHistory,
     loadChatHistory,
+    saveHighlights,
+    loadHighlights,
     saveConceptHistory,
     loadConceptHistory,
     getCurrentConceptIndex,  // 添加获取当前概念索引函数

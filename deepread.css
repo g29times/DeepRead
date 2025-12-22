@@ -53,7 +53,7 @@
     top: 0;
     right: 0;
     width: 400px;
-    min-width: 400px; /* 最小宽度限制 */
+    min-width: 100px; /* 最小宽度限制 */
     height: 100vh;
     max-width: 80vw; /* 增加最大宽度限制，避免拖动过大 */
     background-color: var(--deepread-white) !important;
@@ -100,6 +100,197 @@
     transform: translateX(100%);
     opacity: 0;
     pointer-events: none;
+}
+
+/* DeepRead 左侧卡尺（minimap） */
+.deepread-minimap {
+    position: fixed;
+    top: 50px;
+    left: calc(14px + var(--deepread-minimap-x, 0px));
+    width: 122px;
+    box-sizing: border-box;
+    height: calc(100vh - 80px);
+    z-index: 10001;
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 14px;
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.10);
+    display: grid;
+    grid-template-rows: auto auto 120px 1fr;
+    padding: 6px;
+    row-gap: 6px;
+}
+
+.deepread-minimap * {
+    box-sizing: border-box;
+    min-width: 0;
+}
+
+.deepread-minimap.deepread-hidden {
+    transform: translateX(-100%);
+}
+
+.deepread-minimap-bar {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    min-height: 120px;
+    margin-top: 2px;
+}
+
+.deepread-minimap-pan {
+    height: 8px;
+    cursor: grab;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.05);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.deepread-minimap-pan:hover {
+    background: rgba(76, 175, 80, 0.18);
+    border-color: rgba(76, 175, 80, 0.34);
+}
+
+.deepread-minimap-pan:active {
+    cursor: grabbing;
+}
+
+.deepread-minimap-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 36px 40px;
+    align-items: center;
+    justify-content: stretch;
+    width: 100%;
+    gap: 6px;
+}
+
+.deepread-minimap-export {
+    cursor: pointer;
+    grid-column: 1 / -1;
+    height: 36px;
+    border-radius: 10px;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    background: rgba(76, 175, 80, 0.18);
+    color: var(--deepread-gray);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+
+.deepread-minimap-preview {
+    margin-bottom: 2px;
+    padding: 3px;
+    border-radius: 10px;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    background: rgba(76, 175, 80, 0.18);
+    font-size: 16px;
+    line-height: 1.35;
+    color: var(--deepread-black);
+    overflow: auto;
+    width: 100%;
+}
+
+.deepread-minimap-preview-text {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.deepread-minimap-send {
+    width: 100%;
+    height: 36px;
+    border-radius: 12px;
+    border: 1px solid rgba(33, 150, 243, 0.30);
+    background: rgba(33, 150, 243, 0.12);
+    color: rgba(33, 150, 243, 0.98);
+    cursor: pointer;
+}
+
+.deepread-minimap-send:hover {
+    background: rgba(33, 150, 243, 0.16);
+}
+
+.deepread-minimap-copy {
+    width: 100%;
+    height: 36px;
+    border-radius: 12px;
+    border: 1px solid rgba(0, 0, 0, 0.10);
+    background: rgba(0, 0, 0, 0.04);
+    color: rgba(0, 0, 0, 0.72);
+    cursor: pointer;
+}
+
+.deepread-minimap-copy:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+.deepread-user-highlight.deepread-user-highlight-selected {
+    outline: 2px solid rgba(76, 175, 80, 0.55);
+    box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.18);
+}
+
+.deepread-minimap-pan {
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.05);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.deepread-minimap-cap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.deepread-minimap-count {
+    font-size: 12px;
+    color: var(--deepread-gray);
+}
+
+.deepread-minimap-rail {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 100%;
+    height: 100%;
+    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(0,0,0,0.06), rgba(0,0,0,0.02));
+}
+
+.deepread-minimap-view {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 100%;
+    border-radius: 10px;
+    background: rgba(76, 175, 80, 0.16);
+    border: 1px solid rgba(76, 175, 80, 0.28);
+}
+
+.deepread-minimap-dot {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 90%;
+    height: 8px;
+    border-radius: 10px;
+    background: rgba(255, 120, 60, 0.85);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    cursor: pointer;
+}
+
+.deepread-minimap-dot:hover {
+    filter: brightness(0.95);
+}
+
+/* 精确选区高亮 */
+.deepread-precise-highlight {
+    background: rgba(255, 235, 59, 0.35);
+    border-radius: 4px;
+    padding: 2px 4px;
+    border: 1px solid rgba(255, 193, 7, 0.45);
+    box-shadow: 0 0 0 3px rgba(255, 235, 59, 0.12);
 }
 
 .deepread-header {
@@ -291,6 +482,32 @@
     margin-bottom: 5px;
 }
 
+/* 强度条（heatmap） */
+.deepread-strength-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 2px 0 6px;
+}
+
+.deepread-strength-text {
+    font-size: 12px;
+    color: var(--deepread-gray);
+}
+
+.deepread-heat {
+    height: 10px;
+    border-radius: 999px;
+    background: var(--deepread-light-gray);
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+
+.deepread-heat-fill {
+    height: 100%;
+    border-radius: 999px;
+}
+
 .deepread-paragraph-reason {
     color: var(--deepread-blue);
 }
@@ -475,13 +692,12 @@
     position: absolute;
     background-color: var(--deepread-green);
     color: white;
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
+    padding: 6px;
+    border-radius: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-weight: bold;
+    gap: 6px;
     cursor: pointer;
     box-shadow: 0 2px 5px var(--deepread-dark-gray);
     z-index: 9998;
@@ -491,6 +707,37 @@
 .deepread-float-button:hover {
     transform: scale(1.1);
     background-color: var(--deepread-green);
+}
+
+.deepread-float-action {
+    border: none;
+    background: rgba(255, 255, 255, 0.18);
+    color: white;
+    font-weight: 600;
+    padding: 6px 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.deepread-float-action:hover {
+    background: rgba(255, 255, 255, 0.28);
+}
+
+.deepread-float-highlight {
+    background: rgba(255, 235, 59, 0.25);
+}
+
+.deepread-float-explain {
+    background: rgba(255, 255, 255, 0.18);
+}
+
+/* 用户划线常亮 */
+.deepread-user-highlight {
+    background: rgba(255, 235, 59, 0.35);
+    border-bottom: 2px solid rgba(255, 193, 7, 0.85);
+    padding: 0 2px;
+    border-radius: 4px;
 }
 
 /* 文本编辑器 */
