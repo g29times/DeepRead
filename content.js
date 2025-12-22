@@ -61,6 +61,46 @@ function isDeepReadMinimapPinned(){
     }
 }
 
+async function ensurePageAnalyzedHydratedForExplain(){
+    try{
+        if (pageAnalyzed) return true;
+        if (!window.cacheManager || typeof window.cacheManager.loadPageContent !== 'function') return false;
+        const url = window.location.href;
+        const cachedPageContent = await window.cacheManager.loadPageContent(url);
+        if (!cachedPageContent) return false;
+
+        const nextPageContent = cachedPageContent.content || '';
+        const nextPageSummary = cachedPageContent.summary || '';
+        const nextPageKeyTerms = cachedPageContent.keyTerms || [];
+        const nextPageKeyParagraphs = cachedPageContent.keyParagraphs || [];
+
+        const contentValid = nextPageContent
+            && nextPageContent.length > 0
+            && nextPageSummary
+            && nextPageSummary.length > 0
+            && nextPageSummary != pageSummaryFallback
+            && nextPageKeyTerms
+            && nextPageKeyTerms.length > 0
+            && nextPageKeyParagraphs
+            && nextPageKeyParagraphs.length > 0;
+
+        if (!contentValid) return false;
+
+        pageContent = nextPageContent;
+        pageSummary = nextPageSummary;
+        pageKeyTerms = nextPageKeyTerms;
+        pageKeyParagraphs = nextPageKeyParagraphs;
+        pageAnalyzed = true;
+        try{
+            await window.cacheManager.savePageAnalyzedStatus(url, true);
+        }catch{}
+        return true;
+    }catch(err){
+        console.warn('DeepRead: ensurePageAnalyzedHydratedForExplain 失败:', err);
+        return false;
+    }
+}
+
 function setDeepReadMinimapPinned(v){
     try{
         localStorage.setItem('deepread_minimap_pinned', v ? '1' : '0');
@@ -1112,7 +1152,7 @@ function ensureDeepReadMinimap(){
             <button class="deepread-minimap-copy" type="button" title="复制文本内容" disabled>复制</button>
         </div>
         <div class="deepread-minimap-preview" id="deepreadMinimapPreview" title="划线预览"></div>
-        <div class="deepread-minimap-bar" id="deepreadMinimapBar" title="划线微缩">
+        <div class="deepread-minimap-bar" id="deepreadMinimapBar" title="划线导航">
             <div class="deepread-minimap-rail"></div>
             <div class="deepread-minimap-view" id="deepreadMinimapView"></div>
         </div>
@@ -1249,9 +1289,16 @@ function getClosestParagraphElement(node){
     const direct = el.closest('[data-dr-paragraph-id], [id^="paragraph-"]');
     if (direct) return direct;
 
-    // 真实网页兼容：正文段落常见是 p/li/blockquote/pre/h1-h6，并且可能自带非 paragraph-* 的 id
-    const fallback = el.closest('p, li, blockquote, pre, h1, h2, h3, h4, h5, h6');
+    // 真实网页兼容：正文段落常见是 p/li/blockquote/pre/h1-h6；也可能是 section/div 作为块级文本容器
+    const fallback = el.closest('p, li, blockquote, pre, h1, h2, h3, h4, h5, h6, section, div');
     if (!fallback) return null;
+
+    // 避免误选到超大容器（比如 body/main/article 外壳），导致 offsets 过大、dots 定位异常
+    if (fallback.tagName === 'SECTION' || fallback.tagName === 'DIV'){
+        const t = (fallback.textContent || '').trim();
+        if (!t || t.length < 5) return null;
+        if (t.length > 2000) return null;
+    }
 
     // 补齐 data-dr-paragraph-id：优先复用现有 id；如果没有 id，则生成一个
     if (!fallback.getAttribute('data-dr-paragraph-id')){
@@ -1767,6 +1814,10 @@ function addTextSelectionListener() {
                         document.body.removeChild(floatButton);
                     }
 
+                    ;(async () => {
+                    const hydrated = await ensurePageAnalyzedHydratedForExplain();
+                    debugLog('[Explain] hydratedFromCache=' + hydrated + ', pageAnalyzed=' + pageAnalyzed);
+
                     if (!pageAnalyzed){
                         if (!document.getElementById('deepread-container')) {
                             createDeepReadPanel();
@@ -1798,6 +1849,7 @@ function addTextSelectionListener() {
                         anchorData.text = lastSelectionOffsets.text;
                     }
                     openDeepReadWithConcept(selectedText, anchorData);
+                    })();
                 });
             }
             
@@ -3797,7 +3849,23 @@ async function explainConcept(conceptName, element, options = {}) {
             }
             
             // 显示加载状态
-            const explanationDiv = document.getElementById('deepread-explanation-section-id');
+            let explanationDiv = document.getElementById('deepread-explanation-section-id');
+            if (!explanationDiv) {
+                // 刷新后直接触发解释：面板可能仍停留在“开始全文分析”着陆页，需要先渲染分析结果布局
+                if (pageAnalyzed) {
+                    try{
+                        debugLog('[Explain] explanationDiv missing; render analysis results layout first');
+                        showAnalysisResults({
+                            summary: pageSummary,
+                            keyTerms: pageKeyTerms,
+                            keyParagraphs: pageKeyParagraphs
+                        });
+                    }catch(err){
+                        console.warn('DeepRead: explainConcept 渲染分析布局失败:', err);
+                    }
+                    explanationDiv = document.getElementById('deepread-explanation-section-id');
+                }
+            }
             if (!explanationDiv) {
                 console.error('未找到解释区域');
                 return;
