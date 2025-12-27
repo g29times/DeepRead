@@ -107,6 +107,13 @@ function setDeepReadMinimapPinned(v){
     }catch{}
 }
 
+function hideDeepReadMinimapPinned(){
+    const minimap = document.getElementById('deepread-minimap');
+    if (!minimap) return;
+    minimap.classList.add('deepread-hidden');
+    setDeepReadMinimapPinned(false);
+}
+
 function showDeepReadMinimapPinned(restore = true){
     const minimap = ensureDeepReadMinimap();
     if (!minimap) return null;
@@ -851,6 +858,9 @@ if (isExtensionEnvironment) {
                 // 显示面板
                 toggleDeepReadPanel();
 
+                // popup “开始深度阅读”明确要求打开 minimap（即使用户之前关闭过）
+                showDeepReadMinimapPinned(true);
+
                 addParagraphIds();
                 
                 // 再次从缓存加载页面内容
@@ -891,6 +901,9 @@ if (isExtensionEnvironment) {
                 addTextSelectionListener();
                 // 显示面板
                 toggleDeepReadPanel();
+
+                // popup “开始深度阅读”明确要求打开 minimap（即使用户之前关闭过）
+                showDeepReadMinimapPinned(true);
                 
                 sendResponse({status: 'success', message: '深度阅读已启动'});
             }
@@ -1122,10 +1135,6 @@ function toggleDeepReadPanel() {
     // 切换面板显示状态
     if (container) {
         container.classList.toggle('deepread-hidden');
-        // 右侧面板开闭与左侧 minimap 解耦：minimap 一旦打开即常驻，不随右侧隐藏
-        if (!container.classList.contains('deepread-hidden')){
-            showDeepReadMinimapPinned(true);
-        }
         if (container.classList.contains('deepread-hidden')) {
             debugLog('隐藏DeepRead面板');
         } else {
@@ -1257,6 +1266,13 @@ function bindDeepReadMinimapPan(){
         if (typeof minOffset === 'number') next = Math.max(minOffset, next);
         if (typeof maxOffset === 'number') next = Math.min(maxOffset, next);
         setDeepReadMinimapX(next);
+    });
+
+    pan.addEventListener('dblclick', (e) => {
+        endDrag();
+        hideDeepReadMinimapPinned();
+        e.preventDefault();
+        e.stopPropagation();
     });
 
     function endDrag(){
