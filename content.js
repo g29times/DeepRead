@@ -61,6 +61,81 @@ function isDeepReadMinimapPinned(){
     }
 }
 
+function isDeepReadMinimapVisible(){
+    try{
+        const v = localStorage.getItem('deepread_minimap_visible');
+        if (v === null || v === undefined) return true;
+        return v === '1';
+    }catch{
+        return true;
+    }
+}
+
+function setDeepReadMinimapVisible(v){
+    try{
+        localStorage.setItem('deepread_minimap_visible', v ? '1' : '0');
+    }catch{}
+}
+
+function updateDeepReadMinimapAnchorLeft(){
+    try{
+        const main = document.getElementById('deepread-container');
+        let left = null;
+
+        // 仅当主窗口可见时才刷新锚点（避免某些页面/时序下 left 计算失真导致 minimap 跑飞）
+        if (main && !main.classList.contains('deepread-hidden')){
+            const rect = main.getBoundingClientRect();
+            const next = Math.round(rect.left || 0);
+            if (Number.isFinite(next)) left = next;
+        }
+
+        // 主窗口不可见/不存在：沿用上一次有效锚点（避免写成 0 导致 minimap 往左消失）
+        if (left === null){
+            try{
+                const cached = parseInt(localStorage.getItem('deepread_minimap_anchor_left') || '', 10);
+                if (Number.isFinite(cached)) left = cached;
+            }catch{}
+        }
+
+        // 兜底：给一个稳定默认值（接近 14px 边距 + 122px 宽度）
+        if (left === null) left = 136;
+
+        // clamp：保证 minimap left=anchor-122 不会为负（避免直接跑出屏幕左侧）
+        left = Math.max(122, left);
+
+        document.documentElement.style.setProperty('--deepread-minimap-anchor-left', `${left}px`);
+        try{ localStorage.setItem('deepread_minimap_anchor_left', String(left)); }catch{}
+    }catch{}
+    // minimap 位置只跟随主窗口，不允许被页面/拖拽偏移影响
+    try{
+        document.documentElement.style.setProperty('--deepread-minimap-x', '0px');
+        localStorage.setItem('deepread_minimap_x', '0');
+    }catch{}
+}
+
+function collapseDeepReadMinimap(){
+    const minimap = ensureDeepReadMinimap();
+    if (!minimap) return;
+    updateDeepReadMinimapAnchorLeft();
+    minimap.classList.add('deepread-minimap-collapsed');
+    minimap.classList.remove('deepread-hidden');
+    setDeepReadMinimapVisible(false);
+}
+
+function expandDeepReadMinimap(restore = true){
+    const minimap = ensureDeepReadMinimap();
+    if (!minimap) return null;
+    updateDeepReadMinimapAnchorLeft();
+    minimap.classList.remove('deepread-minimap-collapsed');
+    minimap.classList.remove('deepread-hidden');
+    setDeepReadMinimapPinned(true);
+    setDeepReadMinimapVisible(true);
+    if (restore){
+        restoreHighlightsFromCacheAndRender().catch(err => console.warn('恢复划线失败:', err));
+    }
+    return minimap;
+}
+
 async function ensurePageAnalyzedHydratedForExplain(){
     try{
         if (pageAnalyzed) return true;
@@ -108,14 +183,13 @@ function setDeepReadMinimapPinned(v){
 }
 
 function showDeepReadMinimapPinned(restore = true){
-    const minimap = ensureDeepReadMinimap();
-    if (!minimap) return null;
-    minimap.classList.remove('deepread-hidden');
-    setDeepReadMinimapPinned(true);
-    if (restore){
-        restoreHighlightsFromCacheAndRender().catch(err => console.warn('恢复划线失败:', err));
+    // 尊重用户显式关闭（visible=0）：此时只保持“唤起条可点”，不自动展开
+    if (!isDeepReadMinimapVisible()){
+        setDeepReadMinimapPinned(true);
+        collapseDeepReadMinimap();
+        return document.getElementById('deepread-minimap') || null;
     }
-    return minimap;
+    return expandDeepReadMinimap(restore);
 }
 
 function findParagraphEl(pid){
@@ -132,7 +206,7 @@ function findParagraphEl(pid){
 
 function updateMinimapUIIfVisible({ previewText = '', previewHid = null } = {}){
     const minimap = document.getElementById('deepread-minimap') || null;
-    if (!minimap || minimap.classList.contains('deepread-hidden')) return;
+    if (!minimap || minimap.classList.contains('deepread-hidden') || minimap.classList.contains('deepread-minimap-collapsed')) return;
     try{
         renderHighlightMinimapDots();
         updateDeepReadMinimapViewport();
@@ -561,8 +635,63 @@ async function saveHighlightsToCache(){
 function buildHighlightsExportText(){
     const title = (document && document.title) ? String(document.title).trim() : '';
     const url = window.location.href;
-    const highlights = (Array.isArray(highlightHistory) ? highlightHistory : [])
-        .filter(h => h && typeof h.text === 'string' && h.text.trim())
+    const rawHighlights = (Array.isArray(highlightHistory) ? highlightHistory : [])
+        .filter(h => h && typeof h.text === 'string' && h.text.trim());
+
+    // 按原文顺序导出：先按段落容器在 DOM 中的顺序，再按段内 start offset
+    // 若段落容器无法定位，则回退到 createdAt 顺序
+    let paragraphOrder = new Map();
+    try{
+        const els = Array.from(document.querySelectorAll('[data-dr-paragraph-id]'));
+        for (let i = 0; i < els.length; i++){
+            const pid = els[i] && els[i].getAttribute('data-dr-paragraph-id');
+            if (pid && !paragraphOrder.has(pid)) paragraphOrder.set(pid, i);
+        }
+    }catch{}
+
+    const highlights = rawHighlights
+        .slice()
+        .sort((a, b) => {
+            const aPid = a && a.paragraphId;
+            const bPid = b && b.paragraphId;
+
+            let aIdx = (aPid && paragraphOrder.has(aPid)) ? paragraphOrder.get(aPid) : null;
+            let bIdx = (bPid && paragraphOrder.has(bPid)) ? paragraphOrder.get(bPid) : null;
+
+            // 尝试通过实际元素回填一次（应对 data-dr-paragraph-id 刚刚补齐或 pid 是元素 id 的情况）
+            if (aIdx == null && aPid){
+                try{
+                    const aEl = findParagraphEl(aPid);
+                    if (aEl){
+                        const pid = aEl.getAttribute('data-dr-paragraph-id') || aEl.id;
+                        if (pid && paragraphOrder.has(pid)) aIdx = paragraphOrder.get(pid);
+                    }
+                }catch{}
+            }
+            if (bIdx == null && bPid){
+                try{
+                    const bEl = findParagraphEl(bPid);
+                    if (bEl){
+                        const pid = bEl.getAttribute('data-dr-paragraph-id') || bEl.id;
+                        if (pid && paragraphOrder.has(pid)) bIdx = paragraphOrder.get(pid);
+                    }
+                }catch{}
+            }
+
+            const aMissing = (aIdx == null);
+            const bMissing = (bIdx == null);
+            if (!aMissing && !bMissing && aIdx !== bIdx) return aIdx - bIdx;
+            if (!aMissing && bMissing) return -1;
+            if (aMissing && !bMissing) return 1;
+
+            const aStart = (typeof a.start === 'number') ? a.start : 0;
+            const bStart = (typeof b.start === 'number') ? b.start : 0;
+            if (aStart !== bStart) return aStart - bStart;
+
+            const aCreated = (typeof a.createdAt === 'number') ? a.createdAt : 0;
+            const bCreated = (typeof b.createdAt === 'number') ? b.createdAt : 0;
+            return aCreated - bCreated;
+        })
         .map(h => h.text.trim());
 
     const parts = [];
@@ -623,7 +752,7 @@ function setHighlightPreviewText(text, hid){
 
 function renderHighlightMinimapDots(){
     const minimap = document.getElementById('deepread-minimap');
-    if (!minimap || minimap.classList.contains('deepread-hidden')) return;
+    if (!minimap || minimap.classList.contains('deepread-hidden') || minimap.classList.contains('deepread-minimap-collapsed')) return;
     const bar = minimap.querySelector('#deepreadMinimapBar');
     const countEl = minimap.querySelector('#deepreadMinimapCount');
     const exportBtn = minimap.querySelector('#deepreadMinimapExport');
@@ -767,9 +896,18 @@ async function init() {
                 debugLog(`从缓存加载了 ${highlightHistory.length} 条划线记录`);
             }
 
-            // 左侧 minimap 一旦打开后常驻：若之前 pinned，则页面刷新后自动恢复显示
+            // 左侧 minimap 恢复：根据 pinned 和 visible 状态决定显示/收起/隐藏
             if (isDeepReadMinimapPinned()){
-                showDeepReadMinimapPinned(true);
+                if (isDeepReadMinimapVisible()){
+                    showDeepReadMinimapPinned(true);
+                } else {
+                    // pinned 但 visible=0：显示为收起态
+                    const minimap = ensureDeepReadMinimap();
+                    if (minimap){
+                        minimap.classList.remove('deepread-hidden');
+                        collapseDeepReadMinimap();
+                    }
+                }
             }
             
             // 加载页面内容
@@ -1145,7 +1283,10 @@ function ensureDeepReadMinimap(){
     el.className = 'deepread-minimap deepread-hidden';
     el.setAttribute('aria-label', 'DeepRead 卡尺');
     el.innerHTML = `
-        <div class="deepread-minimap-pan" id="deepreadMinimapPan" title="拖动窗口"></div>
+        <div class="deepread-minimap-pan" id="deepreadMinimapPan" title="拖动窗口（双击收起）">
+            <button class="deepread-minimap-close" id="deepreadMinimapClose" type="button" title="收起（双击拖动条也可收起）">×</button>
+        </div>
+        <div class="deepread-minimap-wake" id="deepreadMinimapWake" title="展开"></div>
         <div class="deepread-minimap-actions" id="deepreadMinimapActions">
             <button class="deepread-minimap-export" id="deepreadMinimapExport" title="导出全部划线" disabled>导出划线<span class="deepread-minimap-count" id="deepreadMinimapCount">—</span></button>
             <button class="deepread-minimap-send" type="button" title="发送到飞书" disabled>发送</button>
@@ -1158,6 +1299,24 @@ function ensureDeepReadMinimap(){
         </div>
     `;
     document.body.appendChild(el);
+
+    const closeBtn = document.getElementById('deepreadMinimapClose');
+    if (closeBtn){
+        closeBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            collapseDeepReadMinimap();
+        });
+    }
+
+    const wake = document.getElementById('deepreadMinimapWake');
+    if (wake){
+        wake.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            expandDeepReadMinimap(true);
+        });
+    }
 
     const exportBtn = document.getElementById('deepreadMinimapExport');
     if (exportBtn){
@@ -1189,9 +1348,12 @@ function ensureDeepReadMinimap(){
     restoreDeepReadMinimapX();
     bindDeepReadMinimapPan();
 
+    updateDeepReadMinimapAnchorLeft();
+
     // 滚动/缩放更新 viewport
     window.addEventListener('scroll', updateDeepReadMinimapViewport, { passive: true });
     window.addEventListener('resize', () => {
+        updateDeepReadMinimapAnchorLeft();
         renderHighlightMinimapDots();
         updateDeepReadMinimapViewport();
     });
@@ -1227,23 +1389,17 @@ function bindDeepReadMinimapPan(){
 
     let dragging = false;
     let startX = 0;
-    let startOffset = 0;
-    let minOffset = null;
-    let maxOffset = null;
+    let moved = false;
+    let lastTapTs = 0;
 
     pan.addEventListener('pointerdown', (e) => {
+        const t = e.target;
+        if (t && t.closest && t.closest('#deepreadMinimapClose')) return;
+        // minimap 位置只允许跟随主窗口锚点，不允许自身拖拽改变位置
+        updateDeepReadMinimapAnchorLeft();
         dragging = true;
         startX = e.clientX;
-        startOffset = getDeepReadMinimapX();
-
-        const rect = card.getBoundingClientRect();
-        const vw = window.innerWidth || document.documentElement.clientWidth || 0;
-
-        // 允许在视口内拖动：左边不小于 8px，右边不超过 vw-8px
-        const canMoveLeft = rect.left - 8;
-        const canMoveRight = (vw - 8) - rect.right;
-        minOffset = startOffset - canMoveLeft;
-        maxOffset = startOffset + canMoveRight;
+        moved = false;
 
         try{ pan.setPointerCapture(e.pointerId); }catch{}
         e.preventDefault();
@@ -1253,19 +1409,30 @@ function bindDeepReadMinimapPan(){
     pan.addEventListener('pointermove', (e) => {
         if (!dragging) return;
         const dx = e.clientX - startX;
-        let next = startOffset + dx;
-        if (typeof minOffset === 'number') next = Math.max(minOffset, next);
-        if (typeof maxOffset === 'number') next = Math.min(maxOffset, next);
-        setDeepReadMinimapX(next);
+        if (Math.abs(dx) > 3) moved = true;
+        // 禁用拖拽移动：不做任何位置修改
     });
 
     function endDrag(){
         dragging = false;
-        minOffset = null;
-        maxOffset = null;
     }
 
-    pan.addEventListener('pointerup', endDrag);
+    pan.addEventListener('pointerup', (e) => {
+        try{
+            if (!moved){
+                const now = Date.now();
+                if (now - lastTapTs <= 400){
+                    collapseDeepReadMinimap();
+                    lastTapTs = 0;
+                } else {
+                    lastTapTs = now;
+                }
+            }
+        }catch{}
+        endDrag();
+        // 结束交互后再次对齐锚点，避免个别页面 pointer capture 导致的视觉偏移
+        updateDeepReadMinimapAnchorLeft();
+    });
     pan.addEventListener('pointercancel', endDrag);
 }
 
@@ -1414,7 +1581,7 @@ function renderConceptMinimapDots(){
 
 function updateDeepReadMinimapViewport(){
     const minimap = document.getElementById('deepread-minimap');
-    if (!minimap || minimap.classList.contains('deepread-hidden')) return;
+    if (!minimap || minimap.classList.contains('deepread-hidden') || minimap.classList.contains('deepread-minimap-collapsed')) return;
     const bar = minimap.querySelector('#deepreadMinimapBar');
     const view = minimap.querySelector('#deepreadMinimapView');
     if (!bar || !view) return;
@@ -1467,6 +1634,9 @@ function initResizeHandlers(container, resizeHandle) {
         if (newWidth >= 400) {
             container.style.width = newWidth + 'px';
         }
+
+        // 主窗口尺寸变化时同步更新 minimap 锚点
+        updateDeepReadMinimapAnchorLeft();
         
         // 阻止事件冒泡和默认行为
         e.preventDefault();
@@ -1481,6 +1651,8 @@ function initResizeHandlers(container, resizeHandle) {
             resizeHandle.classList.remove('active');
             document.body.style.cursor = '';
             document.body.style.userSelect = '';
+
+            updateDeepReadMinimapAnchorLeft();
         }
     });
 }
@@ -1795,7 +1967,7 @@ function addTextSelectionListener() {
 
                     // 只要用户成功划线，就自动展开左侧 minimap（与右侧面板解耦）
                     // 这里传 false，避免触发 restore 导致重复 wrap
-                    showDeepReadMinimapPinned(false);
+                    expandDeepReadMinimap(false);
 
                     // 左侧 minimap 独立：只要可见就刷新 dots + 预览（不依赖右侧面板）
                     setSelectedHighlightId(highlight.id);
@@ -1856,12 +2028,12 @@ function addTextSelectionListener() {
             // 添加到页面
             document.body.appendChild(floatButton);
             
-            // 60秒后自动移除浮动按钮
+            // 10秒后自动移除浮动按钮
             setTimeout(function() {
                 if (document.body.contains(floatButton)) {
                     document.body.removeChild(floatButton);
                 }
-            }, 60000);
+            }, 10000);
         }
     });
 }
