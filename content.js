@@ -3603,7 +3603,8 @@ function showAnalysisResults(analysisResult) {
                 <div class="deepread-section-header">
                     <h3>概念解释区</h3>
                     <div class="deepread-header-buttons">
-                        <button class="deepread-insert-chat-btn" id="deepread-insert-chat-full" title="将全文分析加入对话">插入对话</button>
+                        <button class="deepread-insert-chat-btn" id="deepread-insert-chat-full" title="将分析加入对话">插入对话</button>
+                        <button class="deepread-insert-chat-btn" id="deepread-reanalyze-full" title="重新选择需要分析的内容范围">重新分析</button>
                     </div>
                 </div>
                 <div class="deepread-concept-header">
@@ -4253,6 +4254,9 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
             // 创建概念导航按钮
             const prevDisabled = currentConceptIndex <= 0;
             const nextDisabled = currentConceptIndex >= conceptHistory.length - 1;
+
+            const reanalyzeButtonHtml = (displayName === '全文分析') ?
+                `<button class="deepread-insert-chat-btn" id="deepread-reanalyze-full" title="重新选择需要分析的内容范围">重新分析</button>` : '';
             
             explanationDiv.innerHTML = `
                 <div class="deepread-section-header">
@@ -4260,6 +4264,7 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
                     <div class="deepread-header-buttons">
                         <button class="deepread-return-btn" id="deepread-return-to-full" title="返回全文分析">返回全文</button>
                         <button class="deepread-insert-chat-btn" id="deepread-insert-chat" title="将概念解释加入对话">插入对话</button>
+                        ${reanalyzeButtonHtml}
                         <button class="deepread-delete-concept-btn" id="deepread-delete-concept" title="删除当前概念">删除概念</button>
                     </div>
 					<div class="deepread-concept-nav">
@@ -5379,6 +5384,17 @@ function initConceptEvents() {
     if (insertChatFullButton && !insertChatFullButton.hasAttribute('data-event-bound')) {
         insertChatFullButton.addEventListener('click', insertConceptToChat);
         insertChatFullButton.setAttribute('data-event-bound', 'true');
+    }
+
+    // 重新分析按钮事件监听（回到页面内容预览/编辑器）
+    const reanalyzeFullButton = document.getElementById('deepread-reanalyze-full');
+    if (reanalyzeFullButton && !reanalyzeFullButton.hasAttribute('data-event-bound')) {
+        reanalyzeFullButton.addEventListener('click', function() {
+            preventDuplicateClick('reanalyze_full', () => {
+                extractPageContent();
+            }, 3000, '正在重新提取页面内容，请稍候...');
+        });
+        reanalyzeFullButton.setAttribute('data-event-bound', 'true');
     }
     
     // 删除概念按钮事件监听
