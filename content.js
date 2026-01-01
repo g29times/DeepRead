@@ -1743,6 +1743,38 @@ function addTextSelectionListener() {
             const btnHighlight = floatButton.querySelector('.deepread-float-highlight');
             const btnExplain = floatButton.querySelector('.deepread-float-explain');
 
+            // 点击按钮外区域时立即移除浮动按钮
+            const onOutsideMouseDown = function(e) {
+                try {
+                    if (!floatButton || !document.body.contains(floatButton)) return;
+                    if (floatButton.contains(e.target)) return;
+                    document.body.removeChild(floatButton);
+                } catch (err) {
+                    // ignore
+                } finally {
+                    try {
+                        document.removeEventListener('mousedown', onOutsideMouseDown, true);
+                    } catch (err) {
+                        // ignore
+                    }
+                }
+            };
+
+            const removeFloatButtonAndCleanup = function() {
+                try {
+                    if (document.body.contains(floatButton)) {
+                        document.body.removeChild(floatButton);
+                    }
+                } catch (err) {
+                    // ignore
+                }
+                try {
+                    document.removeEventListener('mousedown', onOutsideMouseDown, true);
+                } catch (err) {
+                    // ignore
+                }
+            };
+
             if (btnHighlight){
                 btnHighlight.addEventListener('click', async function(e) {
                     e.stopPropagation();
@@ -1754,9 +1786,7 @@ function addTextSelectionListener() {
                     console.log('[DeepRead][HighlightClick] selectedText(mouseup):', selectedText);
 
                     // 移除浮动按钮
-                    if (document.body.contains(floatButton)) {
-                        document.body.removeChild(floatButton);
-                    }
+                    removeFloatButtonAndCleanup();
 
                     // 划线：仅限同段落，且必须能算出 offsets
                     if (!lastSelectionParagraphId || !lastSelectionOffsets) {
@@ -1826,9 +1856,7 @@ function addTextSelectionListener() {
                     debugLog('点击了解释，选中文本: ' + selectedText);
 
                     // 移除浮动按钮
-                    if (document.body.contains(floatButton)) {
-                        document.body.removeChild(floatButton);
-                    }
+                    removeFloatButtonAndCleanup();
 
                     ;(async () => {
                     const hydrated = await ensurePageAnalyzedHydratedForExplain();
@@ -1871,12 +1899,13 @@ function addTextSelectionListener() {
             
             // 添加到页面
             document.body.appendChild(floatButton);
+
+            // 点击空白处立即消失（捕获阶段，避免被站点事件干扰）
+            document.addEventListener('mousedown', onOutsideMouseDown, true);
             
             // 5秒后自动移除浮动按钮 按钮消失
             setTimeout(function() {
-                if (document.body.contains(floatButton)) {
-                    document.body.removeChild(floatButton);
-                }
+                removeFloatButtonAndCleanup();
             }, 5000);
         }
     });
