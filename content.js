@@ -1872,12 +1872,12 @@ function addTextSelectionListener() {
             // 添加到页面
             document.body.appendChild(floatButton);
             
-            // 60秒后自动移除浮动按钮
+            // 5秒后自动移除浮动按钮 按钮消失
             setTimeout(function() {
                 if (document.body.contains(floatButton)) {
                     document.body.removeChild(floatButton);
                 }
-            }, 60000);
+            }, 5000);
         }
     });
 }
