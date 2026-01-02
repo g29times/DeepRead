@@ -904,6 +904,13 @@ if (isExtensionEnvironment) {
 
                 // popup “开始深度阅读”明确要求打开 minimap（即使用户之前关闭过）
                 showDeepReadMinimapPinned(true);
+
+                // 直接进入“页面内容预览”，跳过仅含“开始全文分析”的初始页
+                try {
+                    extractPageContent();
+                } catch (error) {
+                    console.error('startReading: 提取页面内容失败:', error);
+                }
                 
                 sendResponse({status: 'success', message: '深度阅读已启动'});
             }
