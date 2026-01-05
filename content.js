@@ -3451,8 +3451,8 @@ async function callAnalyzeContent(content, language) {
         
         注意：
         1. summary：应简洁清晰，用 3~5 句话总结全文的主题、背景、核心结论。
-        2. keyTerms：5个左右 文中的关键词或概念。(保留文中原始语言和格式，必要时可在括号内翻译)
-        3. keyParagraphs：将全文划分为若干个段落，找出关键段落，并用一句话概扩。
+        2. keyTerms：1~5个 文中的关键词或概念。(保留文中原始语言和格式，必要时可在括号内翻译)
+        3. keyParagraphs：将全文划分为1~10个段落，找出关键段落，并用一句话概扩。
         4. 所有输出必须严格遵循上述JSON格式。
     `;
     
@@ -4103,7 +4103,7 @@ async function callExplanationConcept(conceptName, pageContent = '') {
         注意：
         1. explanation必选
         2. relatedConcepts可选，1~5个文中与所选概念密切相关的其他概念，并按相关性排序(保留文中原始语言和格式，不翻译)
-        3. relatedParagraphs可选，1~5个文中与所选概念最相关的段落ID及相关原因，段落ID格式为"paragraph-X"，其中X是段落的索引号
+        3. relatedParagraphs可选，1~10个文中与所选概念最相关的段落ID及相关原因，段落ID格式为"paragraph-X"，其中X是段落的索引号
         4. 所有输出必须严格遵循JSON格式，不要添加额外的文本
     `;
     
