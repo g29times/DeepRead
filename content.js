@@ -3656,6 +3656,7 @@ function showAnalysisResults(analysisResult) {
                 <div class="deepread-section-header">
                     <h3>对话区</h3>
                     <div class="deepread-header-buttons">
+                        <button class="deepread-export-btn" id="deepread-export-chat" title="导出所有对话记录">导出</button>
                         <button class="deepread-clear-btn" id="deepread-clear-chat" title="清除所有对话记录">×</button>
                     </div>
                 </div>
@@ -4343,7 +4344,8 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
                 <div class="deepread-section-header">
                     <h3>对话区</h3>
                     <div class="deepread-header-buttons">
-                        <button class="deepread-clear-btn" id="deepread-clear-chat" title="清除所有对话记录">×</button>
+                        <button class="deepread-export-btn" id="deepread-export-chat" title="导出所有对话记录">导出</button>
+                        <button class="deepread-clear-btn" id="deepread-clear-chat" title="清除所有对话记录">清除</button>
                     </div>
                 </div>
                 <div id="deepread-chat-messages" class="deepread-chat-messages"></div>
@@ -5455,6 +5457,12 @@ function initChatEvents() {
         // 添加标记，避免重复绑定
         clearChatBtn.setAttribute('data-event-bound', 'true');
     }
+
+    const exportChatBtn = document.getElementById('deepread-export-chat');
+    if (exportChatBtn && !exportChatBtn.hasAttribute('data-event-bound')) {
+        exportChatBtn.addEventListener('click', exportChatHistoryAsMarkdown);
+        exportChatBtn.setAttribute('data-event-bound', 'true');
+    }
     
     // 为现有的聊天消息添加复制和删除按钮
     // addActionButtonsToExistingMessages();
@@ -5534,7 +5542,7 @@ function addChatMessage(message, role, isLoading = false, addToHistory = true, i
     
     // 如果不是加载状态消息且需要添加到历史，则添加到对话历史
     if (!isLoading && addToHistory) {
-        chatHistory.push({ role, message, messageId });
+        chatHistory.push({ role, message, rawMessage: (rawMessage || message), messageId });
         
         // 保存聊天历史到缓存
         if (window.cacheManager) {
@@ -5867,6 +5875,50 @@ async function clearChatHistory() {
         }
     }
     return false;
+}
+
+function exportChatHistoryAsMarkdown() {
+    try {
+        if (!chatHistory || chatHistory.length === 0) {
+            alert('当前没有可导出的对话内容。');
+            return;
+        }
+
+        const now = new Date();
+        const pad2 = n => String(n).padStart(2, '0');
+        const ts = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}_${pad2(now.getHours())}${pad2(now.getMinutes())}`;
+        const safeTitle = String(pageTitle || document.title || 'DeepRead')
+            .replace(/[\\/:*?"<>|\n\r]+/g, '_')
+            .trim()
+            .slice(0, 60) || 'DeepRead';
+
+        const titleLine = `# ${safeTitle} - 对话导出\n\n`;
+        const sourceLine = currentUrl ? `来源：${currentUrl}\n\n---\n\n` : '---\n\n';
+
+        const body = chatHistory.map(item => {
+            const role = item.role === 'user' ? '用户' : '助手';
+            const content = String(item.rawMessage || item.message || '').trim();
+            return `## ${role}\n\n${content}\n\n`;
+        }).join('---\n\n');
+
+        const md = `${titleLine}${sourceLine}${body}`;
+        const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${safeTitle}_${ts}.md`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        setTimeout(() => {
+            try { URL.revokeObjectURL(url); } catch (e) { /* no-op */ }
+        }, 0);
+    } catch (error) {
+        console.error('导出对话失败:', error);
+        alert('导出对话失败，请重试。');
+    }
 }
 
 // *********************************************** 以下是全局公共工具函数 ***********************************************
