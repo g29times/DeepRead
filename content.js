@@ -3426,10 +3426,12 @@ async function callAnalyzeContent(content, language) {
             "keyParagraphs": [
                 {
                     "id": "paragraph-1", 
-                    "reason": "段落主题 --- 关键信息一句话概述..."
+                    "reason": "段落主题 --- 关键信息一句话概述...",
+                    "relevanceScore": 0.0
                 },{
                     "id": "paragraph-2",
-                    "reason": "段落主题 --- 关键信息一句话概述..."
+                    "reason": "段落主题 --- 关键信息一句话概述...",
+                    "relevanceScore": 0.0
                 }
             ]
         }
@@ -3441,10 +3443,12 @@ async function callAnalyzeContent(content, language) {
             "keyParagraphs": [
                 {
                     "id": "paragraph-10", 
-                    "reason": "超新星 --- AI超新星增长速度惊人，商业化第一年平均达到4000万美元ARR，第二年达1.25亿美元。"
+                    "reason": "超新星 --- AI超新星增长速度惊人，商业化第一年平均达到4000万美元ARR，第二年达1.25亿美元。",
+                    "relevanceScore": 0.92
                 },{
                     "id": "paragraph-19",
-                    "reason": "流星 --- 消费级新兴AI生态系统是从生产力工具转向治疗、陪伴和自我成长的更深层用例。"
+                    "reason": "流星 --- 消费级新兴AI生态系统是从生产力工具转向治疗、陪伴和自我成长的更深层用例。",
+                    "relevanceScore": 0.78
                 }
             ]
         }
@@ -3453,7 +3457,8 @@ async function callAnalyzeContent(content, language) {
         1. summary：应简洁清晰，用 3~5 句话总结全文的主题、背景、核心结论。
         2. keyTerms：1~5个 文中的关键词或概念。(保留文中原始语言和格式，必要时可在括号内翻译)
         3. keyParagraphs：将全文划分为1~10个段落，找出关键段落，并用一句话概扩。
-        4. 所有输出必须严格遵循上述JSON格式。
+        4. relevanceScore：必填，范围为 0~1，表示该段落对“全文主旨/核心结论”的相关度，1 为最相关，0 为不相关。
+        5. 所有输出必须严格遵循上述JSON格式。
     `;
     
     // 构建请求内容
@@ -3573,7 +3578,9 @@ function showAnalysisResults(analysisResult) {
                     // console.log('paragraph', paragraph);
                     // const preview = paragraph.textContent.trim();
                     // const clipped = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
-                    const score = getParagraphStrength(paragraphId);
+                    const score = (typeof paragraphInfo === 'object' && typeof paragraphInfo.relevanceScore === 'number')
+                        ? paragraphInfo.relevanceScore
+                        : getParagraphStrength(paragraphId);
                     const pct = Math.round(clamp01(score) * 100);
                     const color = deepreadHeatColor(score);
                     keyParagraphsHtml += `
@@ -4091,10 +4098,12 @@ async function callExplanationConcept(conceptName, pageContent = '') {
             "relatedParagraphs": [
                 {
                     "id": "paragraph-1", 
-                    "reason": "这段内容与所选概念相关的原因"
+                    "reason": "这段内容与所选概念相关的原因",
+                    "relevanceScore": 0.0
                 },{
                     "id": "paragraph-2",
-                    "reason": "这段内容与所选概念相关的原因"
+                    "reason": "这段内容与所选概念相关的原因",
+                    "relevanceScore": 0.5
                 }
             ]
         }
@@ -4105,7 +4114,8 @@ async function callExplanationConcept(conceptName, pageContent = '') {
         1. explanation必选
         2. relatedConcepts可选，1~5个文中与所选概念密切相关的其他概念，并按相关性排序(保留文中原始语言和格式，不翻译)
         3. relatedParagraphs可选，1~10个文中与所选概念最相关的段落ID及相关原因，段落ID格式为"paragraph-X"，其中X是段落的索引号
-        4. 所有输出必须严格遵循JSON格式，不要添加额外的文本
+        4. relevanceScore：可选，范围为 0~1，表示该段落与“所选概念”的相关度，1 为最相关，0 为不相关。
+        5. 所有输出必须严格遵循JSON格式，不要添加额外的文本
     `;
     
     // 构建请求体
@@ -4175,7 +4185,8 @@ function processLLMExplanation(llmResponse, conceptName) {
                         relatedParagraphs.push({
                             id: item.id,
                             text: paragraph.textContent,
-                            reason: sanitizeText(item.reason || "相关段落")
+                            reason: sanitizeText(item.reason || "相关段落"),
+                            relevanceScore: (typeof item.relevanceScore === 'number') ? item.relevanceScore : undefined
                         });
                     }
                 }
@@ -4257,7 +4268,9 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
             if (paragraph) {
                 // const preview = paragraph.textContent.trim();
                 // const clipped = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
-                const score = getParagraphStrength(paragraphId);
+                const score = (typeof paragraphInfo === 'object' && typeof paragraphInfo.relevanceScore === 'number')
+                    ? paragraphInfo.relevanceScore
+                    : getParagraphStrength(paragraphId);
                 const pct = Math.round(clamp01(score) * 100);
                 const color = deepreadHeatColor(score);
                 relatedParagraphsHtml += `
