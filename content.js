@@ -39,6 +39,9 @@ let pageSummary = ''; // 存储页面摘要
 let pageKeyTerms = []; // 存储页面关键概念
 let pageKeyParagraphs = []; // 存储页面关键段落
 
+// 追加导入去重：本标签页内避免重复追加同一份导出
+let importedExportIds = new Set();
+
 // 聊天历史
 let chatHistory = [];
 // 概念查询历史
@@ -58,6 +61,96 @@ function isDeepReadMinimapPinned(){
         return localStorage.getItem('deepread_minimap_pinned') === '1';
     }catch{
         return false;
+    }
+}
+
+function exportChatHistoryForImport() {
+    try {
+        if (!chatHistory || chatHistory.length === 0) {
+            alert('当前没有可复制的对话内容。');
+            return;
+        }
+
+        const exportData = {
+            schema: 'deepread.chat.export.v1',
+            exportId: generateUniqueId(),
+            exportedAt: Date.now(),
+            source: {
+                url: currentUrl || window.location.href,
+                title: document.title || '',
+            },
+            messages: chatHistory.map((item) => ({
+                id: item.messageId || generateUniqueId(),
+                role: item.role === 'user' ? 'user' : 'assistant',
+                content: String(item.rawMessage || item.message || '').trim(),
+            })),
+        };
+
+        const jsonText = JSON.stringify(exportData);
+        navigator.clipboard.writeText(jsonText)
+            .then(() => {
+                alert('已复制可导入对话到剪贴板。');
+            })
+            .catch((err) => {
+                console.error('复制失败:', err);
+                alert('复制失败，请手动复制。');
+            });
+    } catch (error) {
+        console.error('复制可导入对话时出错:', error);
+        alert('复制对话时出错，请稍后重试。');
+    }
+}
+
+async function appendImportedChatFromClipboard() {
+    try {
+        const text = await navigator.clipboard.readText();
+        if (!text || !text.trim()) {
+            alert('剪贴板为空，无法导入。');
+            return;
+        }
+
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch (e) {
+            alert('剪贴板内容不是有效 JSON，无法导入。');
+            return;
+        }
+
+        if (!data || data.schema !== 'deepread.chat.export.v1') {
+            alert('剪贴板内容不是 DeepRead 可导入对话格式。');
+            return;
+        }
+
+        if (!Array.isArray(data.messages) || data.messages.length === 0) {
+            alert('导入内容中没有 messages。');
+            return;
+        }
+
+        const exportId = String(data.exportId || '');
+        if (exportId && importedExportIds.has(exportId)) {
+            alert('该对话已在本标签页导入过，已跳过。');
+            return;
+        }
+
+        const sourceTitle = (data.source && data.source.title) ? String(data.source.title) : '';
+        const sourceUrl = (data.source && data.source.url) ? String(data.source.url) : '';
+        const timeStr = new Date().toLocaleString();
+
+        const header = `【合并对话】来源：《${sourceTitle || '未命名页面'}》\nURL: ${sourceUrl || '未知'}\n导入时间: ${timeStr}\n（以下为该页面的完整历史对话，原样追加）`;
+        addChatMessage(header, 'assistant', false, true);
+
+        data.messages.forEach((m) => {
+            const role = (m && m.role === 'user') ? 'user' : 'assistant';
+            const content = (m && typeof m.content === 'string') ? m.content : '';
+            addChatMessage(content, role, false, true, [], content);
+        });
+
+        if (exportId) importedExportIds.add(exportId);
+        alert('对话已追加导入。');
+    } catch (error) {
+        console.error('追加导入对话时出错:', error);
+        alert('导入失败：可能缺少剪贴板权限或格式不正确。');
     }
 }
 
@@ -3663,6 +3756,8 @@ function showAnalysisResults(analysisResult) {
                 <div class="deepread-section-header">
                     <h3>对话区</h3>
                     <div class="deepread-header-buttons">
+                        <button class="deepread-export-btn" id="deepread-copy-chat-import" title="复制全部对话（可导入）">复制</button>
+                        <button class="deepread-export-btn" id="deepread-append-chat-import" title="追加导入剪贴板中的对话">追加</button>
                         <button class="deepread-export-btn" id="deepread-export-chat" title="导出所有对话记录">导出</button>
                         <button class="deepread-clear-btn" id="deepread-clear-chat" title="清除所有对话记录">×</button>
                     </div>
@@ -4357,6 +4452,8 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
                 <div class="deepread-section-header">
                     <h3>对话区</h3>
                     <div class="deepread-header-buttons">
+                        <button class="deepread-export-btn" id="deepread-copy-chat-import" title="复制全部对话（可导入）">复制</button>
+                        <button class="deepread-export-btn" id="deepread-append-chat-import" title="追加导入剪贴板中的对话">追加</button>
                         <button class="deepread-export-btn" id="deepread-export-chat" title="导出所有对话记录">导出</button>
                         <button class="deepread-clear-btn" id="deepread-clear-chat" title="清除所有对话记录">清除</button>
                     </div>
@@ -5475,6 +5572,18 @@ function initChatEvents() {
     if (exportChatBtn && !exportChatBtn.hasAttribute('data-event-bound')) {
         exportChatBtn.addEventListener('click', exportChatHistoryAsMarkdown);
         exportChatBtn.setAttribute('data-event-bound', 'true');
+    }
+
+    const copyChatImportBtn = document.getElementById('deepread-copy-chat-import');
+    if (copyChatImportBtn && !copyChatImportBtn.hasAttribute('data-event-bound')) {
+        copyChatImportBtn.addEventListener('click', exportChatHistoryForImport);
+        copyChatImportBtn.setAttribute('data-event-bound', 'true');
+    }
+
+    const appendChatImportBtn = document.getElementById('deepread-append-chat-import');
+    if (appendChatImportBtn && !appendChatImportBtn.hasAttribute('data-event-bound')) {
+        appendChatImportBtn.addEventListener('click', appendImportedChatFromClipboard);
+        appendChatImportBtn.setAttribute('data-event-bound', 'true');
     }
     
     // 为现有的聊天消息添加复制和删除按钮
