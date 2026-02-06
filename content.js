@@ -44,6 +44,9 @@ let importedExportIds = new Set();
 
 // 聊天历史
 let chatHistory = [];
+const CHAT_PERSIST_ENABLED = true;
+let deepreadTabId = null;
+const TAB_CHAT_KEY_PREFIX = 'deepread_chat_history_tab_';
 // 概念查询历史
 let conceptHistory = [];
 let currentConceptIndex = -1; // 当前浏览的概念索引
@@ -854,10 +857,12 @@ async function init() {
             }
 
             // 加载聊天历史
-            const cachedChatHistory = await window.cacheManager.loadChatHistory();
-            if (cachedChatHistory && cachedChatHistory.length > 0) {
-                chatHistory = cachedChatHistory;
-                debugLog(`从缓存加载了 ${chatHistory.length} 条聊天记录`);
+            if (CHAT_PERSIST_ENABLED) {
+                const cachedChatHistory = await loadTabChatHistory();
+                if (cachedChatHistory && cachedChatHistory.length > 0) {
+                    chatHistory = cachedChatHistory;
+                    debugLog(`从缓存加载了 ${chatHistory.length} 条聊天记录`);
+                }
             }
 
             // 加载用户划线（仅加载到内存；恢复 DOM 在面板打开时执行）
@@ -5670,9 +5675,8 @@ function addChatMessage(message, role, isLoading = false, addToHistory = true, i
         chatHistory.push({ role, message, rawMessage: (rawMessage || message), messageId });
         
         // 保存聊天历史到缓存
-        if (window.cacheManager) {
-            debugLog('addChatMessage 调用 saveChatHistory');
-            window.cacheManager.saveChatHistory(chatHistory)
+        if (CHAT_PERSIST_ENABLED) {
+            saveTabChatHistory(chatHistory)
                 .catch(error => console.error('保存聊天历史到缓存失败:', error));
         }
     }
@@ -5814,9 +5818,8 @@ function deleteChatMessage(messageId, skipConfirm = false) {
             if (idSuffix >= 0 && idSuffix < chatHistory.length) {
                 chatHistory.splice(idSuffix, 1);
                 // 保存更新后的聊天历史到缓存
-                if (window.cacheManager) {
-                    debugLog('deleteChatMessage 调用 saveChatHistory');
-                    window.cacheManager.saveChatHistory(chatHistory)
+                if (CHAT_PERSIST_ENABLED) {
+                    saveTabChatHistory(chatHistory)
                         .catch(error => console.error('保存聊天历史到缓存失败:', error));
                 }
                 console.log('chatHistory 更新后长度:', chatHistory.length);
@@ -5986,9 +5989,8 @@ async function clearChatHistory() {
             chatHistory = [];
             
             // 清除缓存
-            if (window.cacheManager) {
-                debugLog('clearChatHistory 调用 saveChatHistory');
-                await window.cacheManager.saveChatHistory([]);
+            if (CHAT_PERSIST_ENABLED) {
+                await saveTabChatHistory([]);
             }
             
             alert('聊天记录已清除！');
@@ -6000,6 +6002,84 @@ async function clearChatHistory() {
         }
     }
     return false;
+}
+
+async function resolveDeepreadTabId() {
+    if (deepreadTabId !== null) return deepreadTabId;
+    if (!isExtensionEnvironment || !chrome || !chrome.runtime || !chrome.runtime.sendMessage) {
+        deepreadTabId = null;
+        return deepreadTabId;
+    }
+    return new Promise((resolve) => {
+        try {
+            chrome.runtime.sendMessage({ action: 'deepread_get_tab_id' }, (resp) => {
+                if (chrome.runtime.lastError) {
+                    deepreadTabId = null;
+                    resolve(deepreadTabId);
+                    return;
+                }
+                const id = resp && resp.ok ? resp.tabId : null;
+                deepreadTabId = (typeof id === 'number') ? id : null;
+                resolve(deepreadTabId);
+            });
+        } catch (e) {
+            deepreadTabId = null;
+            resolve(deepreadTabId);
+        }
+    });
+}
+
+function getTabChatStorageKey(tabId) {
+    if (typeof tabId !== 'number') return null;
+    return `${TAB_CHAT_KEY_PREFIX}${tabId}`;
+}
+
+async function loadTabChatHistory() {
+    const tabId = await resolveDeepreadTabId();
+    const key = getTabChatStorageKey(tabId);
+    if (!key) return [];
+
+    try {
+        if (chrome.storage && chrome.storage.session) {
+            const result = await chrome.storage.session.get([key]);
+            const value = result ? result[key] : null;
+            return Array.isArray(value) ? value : [];
+        }
+    } catch (e) {
+        // ignore
+    }
+
+    try {
+        if (chrome.storage && chrome.storage.local) {
+            const result = await chrome.storage.local.get([key]);
+            const value = result ? result[key] : null;
+            return Array.isArray(value) ? value : [];
+        }
+    } catch (e) {
+        // ignore
+    }
+
+    return [];
+}
+
+async function saveTabChatHistory(history) {
+    const tabId = await resolveDeepreadTabId();
+    const key = getTabChatStorageKey(tabId);
+    if (!key) return;
+    const value = Array.isArray(history) ? history : [];
+
+    try {
+        if (chrome.storage && chrome.storage.session) {
+            await chrome.storage.session.set({ [key]: value });
+            return;
+        }
+    } catch (e) {
+        // ignore
+    }
+
+    if (chrome.storage && chrome.storage.local) {
+        await chrome.storage.local.set({ [key]: value });
+    }
 }
 
 function exportChatHistoryAsMarkdown() {
