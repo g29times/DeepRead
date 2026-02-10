@@ -38,6 +38,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
+chrome.action.onClicked.addListener(async (tab) => {
+  try {
+    if (!tab || typeof tab.id !== 'number') return;
+    if (chrome.sidePanel && chrome.sidePanel.open) {
+      await chrome.sidePanel.open({ tabId: tab.id });
+    }
+  } catch (err) {
+    console.warn('DeepRead background: open side panel failed:', err);
+  }
+});
+
 chrome.tabs.onRemoved.addListener((tabId) => {
   const key = `deepread_chat_history_tab_${tabId}`;
 

@@ -27,7 +27,7 @@ const conceptExplanationFallback = '的解释暂时无法获取。请稍后再�
 const chatResponseFallback = '关于您的问题，我暂时无法回答。请稍后再试。';
 const imageGenerationFallback = '生成图像失败，请稍后再试。';
 // 获取当前页面URL
-let currentUrl = window.location.href;
+const currentUrl = window.location.href;
 
 // API_URL = `https://openrouter.ai/api/v1/chat/completions`;
 const API_BASE_URL = `https://generativelanguage.googleapis.com/v1beta/models/`;
@@ -39,61 +39,8 @@ let pageSummary = ''; // 存储页面摘要
 let pageKeyTerms = []; // 存储页面关键概念
 let pageKeyParagraphs = []; // 存储页面关键段落
 
-function resetAnalysisStateForUrl(nextUrl) {
-    currentUrl = nextUrl || window.location.href;
-    pageAnalyzed = false;
-    pageTitle = document.title;
-    pageContent = '';
-    pageSummary = '';
-    pageKeyTerms = [];
-    pageKeyParagraphs = [];
-}
-
-async function handleUrlChange(nextUrl) {
-    try {
-        resetAnalysisStateForUrl(nextUrl);
-
-        if (window.cacheManager && typeof window.cacheManager.loadPageContent === 'function') {
-            const cached = await window.cacheManager.loadPageContent(currentUrl);
-            if (cached && cached.summary && cached.keyTerms) {
-                pageContent = cached.content || '';
-                pageSummary = cached.summary || '';
-                pageKeyTerms = Array.isArray(cached.keyTerms) ? cached.keyTerms : [];
-                pageKeyParagraphs = Array.isArray(cached.keyParagraphs) ? cached.keyParagraphs : [];
-                pageAnalyzed = true;
-            }
-        }
-    } catch (e) {
-        // ignore
-    }
-}
-
-// 同一 tab 内 URL 变化（例如 SPA 路由、章节翻页）时：解释区随 URL 切换，但对话按 tab 继续
-let __deepread_last_href = window.location.href;
-(async () => {
-    try { await handleUrlChange(__deepread_last_href); } catch (e) { /* no-op */ }
-    try {
-        setInterval(() => {
-            try {
-                const href = window.location.href;
-                if (href && href !== __deepread_last_href) {
-                    __deepread_last_href = href;
-                    handleUrlChange(href);
-                }
-            } catch (e) {
-                // ignore
-            }
-        }, 800);
-    } catch (e) {
-        // ignore
-    }
-})();
-
 // 追加导入去重：本标签页内避免重复追加同一份导出
 let importedExportIds = new Set();
-
-// Side Panel 模式：禁用网页内主体右侧面板（解释区+对话区），仅保留左侧 minimap 等轻量 UI
-const INPAGE_PANEL_DISABLED = true;
 
 // 聊天历史
 let chatHistory = [];
@@ -993,322 +940,6 @@ async function init() {
 if (isExtensionEnvironment) {
     chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
         console.log('Content script received message:', request);
-        if (request.action === 'deepread_sp_get_state') {
-            sendResponse({
-                ok: true,
-                pageMeta: {
-                    title: document.title || '',
-                    url: window.location.href
-                },
-                pageAnalyzed,
-                analysisResult: pageAnalyzed ? {
-                    summary: pageSummary,
-                    keyTerms: pageKeyTerms,
-                    keyParagraphs: pageKeyParagraphs
-                } : null,
-                chatHistory: chatHistory || []
-            });
-            return true;
-        }
-
-        if (request.action === 'deepread_sp_append_chat_message') {
-            (async () => {
-                try {
-                    const role = String(request.role || '').trim();
-                    const rawMessage = String(request.rawMessage || '').trim();
-                    if (role !== 'user' && role !== 'assistant') {
-                        sendResponse({ ok: false, error: 'invalid role' });
-                        return;
-                    }
-                    if (!rawMessage) {
-                        sendResponse({ ok: false, error: 'empty message' });
-                        return;
-                    }
-
-                    const msgId = generateUniqueId();
-                    const msg = {
-                        role,
-                        rawMessage,
-                        message: role === 'assistant' ? processChatResponse(rawMessage) : rawMessage,
-                        messageId: msgId,
-                    };
-
-                    chatHistory.push(msg);
-                    if (CHAT_PERSIST_ENABLED) {
-                        await saveTabChatHistory(chatHistory);
-                    }
-                    sendResponse({ ok: true, chatHistory });
-                } catch (err) {
-                    console.error('SidePanel append_chat_message failed:', err);
-                    sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
-                }
-            })();
-            return true;
-        }
-
-        if (request.action === 'deepread_sp_analyze_full') {
-            (async () => {
-                try {
-                    if (pageAnalyzed) {
-                        sendResponse({
-                            ok: true,
-                            analysisResult: {
-                                summary: pageSummary,
-                                keyTerms: pageKeyTerms,
-                                keyParagraphs: pageKeyParagraphs
-                            }
-                        });
-                        return;
-                    }
-                    pageContent = extractPageContent();
-                    const llmResponse = await callAnalyzeContent(pageContent, default_bot_language);
-
-                    const summary = llmResponse?.summary || pageSummaryFallback;
-                    pageSummary = summary;
-                    pageKeyTerms = Array.isArray(llmResponse?.keyTerms) ? llmResponse.keyTerms : [];
-                    pageKeyParagraphs = Array.isArray(llmResponse?.keyParagraphs) ? llmResponse.keyParagraphs : [];
-
-                    try { await addParagraphIds(); } catch (e) { /* no-op */ }
-
-                    pageAnalyzed = true;
-                    try {
-                        if (window.cacheManager) {
-                            await window.cacheManager.savePageAnalyzedStatus(window.location.href, true);
-                            await window.cacheManager.savePageContent({
-                                url: window.location.href,
-                                title: document.title || '',
-                                content: pageContent,
-                                summary: pageSummary,
-                                keyTerms: pageKeyTerms,
-                                keyParagraphs: pageKeyParagraphs
-                            });
-                        }
-                    } catch (e) {
-                        // ignore
-                    }
-
-                    sendResponse({
-                        ok: true,
-                        analysisResult: {
-                            summary: pageSummary,
-                            keyTerms: pageKeyTerms,
-                            keyParagraphs: pageKeyParagraphs
-                        }
-                    });
-                } catch (err) {
-                    console.error('SidePanel analyze_full failed:', err);
-                    sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
-                }
-            })();
-            return true;
-        }
-
-        if (request.action === 'deepread_sp_explain') {
-            (async () => {
-                try {
-                    const conceptName = String(request.conceptName || '').trim();
-                    if (!conceptName) {
-                        sendResponse({ ok: false, error: 'missing conceptName' });
-                        return;
-                    }
-                    if (!pageContent) {
-                        try { pageContent = extractPageContent(); } catch (e) { /* no-op */ }
-                    }
-                    const conceptResult = await callExplanationConcept(conceptName, pageContent);
-                    sendResponse({ ok: true, conceptResult });
-                } catch (err) {
-                    console.error('SidePanel explain failed:', err);
-                    sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
-                }
-            })();
-            return true;
-        }
-
-        if (request.action === 'deepread_sp_chat_send') {
-            (async () => {
-                try {
-                    const message = String(request.message || '').trim();
-                    if (!message) {
-                        sendResponse({ ok: false, error: 'empty message' });
-                        return;
-                    }
-
-                    // 只更新 history，不渲染 DOM
-                    chatHistory.push({ role: 'user', message, rawMessage: message, messageId: generateUniqueId() });
-                    if (CHAT_PERSIST_ENABLED) {
-                        await saveTabChatHistory(chatHistory);
-                    }
-
-                    // 这里复用现有 chatWithAI 逻辑（它依赖 chatHistory/pageContent）
-                    if (!pageContent) {
-                        try { pageContent = extractPageContent(); } catch (e) { /* no-op */ }
-                    }
-
-                    const responseText = await chatWithAI(message, chatHistory, pageContent, []);
-                    const response = processChatResponse(responseText);
-
-                    chatHistory.push({ role: 'assistant', message: response, rawMessage: responseText, messageId: generateUniqueId() });
-                    if (CHAT_PERSIST_ENABLED) {
-                        await saveTabChatHistory(chatHistory);
-                    }
-
-                    sendResponse({ ok: true, chatHistory });
-                } catch (err) {
-                    console.error('SidePanel chat_send failed:', err);
-                    sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
-                }
-            })();
-            return true;
-        }
-
-        if (request.action === 'deepread_sp_clear_chat') {
-            (async () => {
-                try {
-                    chatHistory = [];
-                    if (CHAT_PERSIST_ENABLED) {
-                        await saveTabChatHistory([]);
-                    }
-                    sendResponse({ ok: true, chatHistory });
-                } catch (err) {
-                    sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
-                }
-            })();
-            return true;
-        }
-
-        if (request.action === 'deepread_sp_delete_chat_message') {
-            (async () => {
-                try {
-                    const messageId = String(request.messageId || '').trim();
-                    if (!messageId) {
-                        sendResponse({ ok: false, error: 'missing messageId' });
-                        return;
-                    }
-
-                    const beforeLen = Array.isArray(chatHistory) ? chatHistory.length : 0;
-                    chatHistory = (chatHistory || []).filter((m) => String(m && m.messageId ? m.messageId : '') !== messageId);
-                    const afterLen = Array.isArray(chatHistory) ? chatHistory.length : 0;
-
-                    if (beforeLen === afterLen) {
-                        sendResponse({ ok: false, error: 'message not found' });
-                        return;
-                    }
-
-                    if (CHAT_PERSIST_ENABLED) {
-                        await saveTabChatHistory(chatHistory);
-                    }
-
-                    sendResponse({ ok: true, chatHistory });
-                } catch (err) {
-                    sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
-                }
-            })();
-            return true;
-        }
-
-        if (request.action === 'deepread_sp_navigate') {
-            (async () => {
-                try {
-                    const paragraphId = String(request.paragraphId || '').trim();
-                    if (!paragraphId) {
-                        sendResponse({ ok: false, error: 'missing paragraphId' });
-                        return;
-                    }
-
-                    const findTarget = (id) => {
-                        try {
-                            if (typeof findByIdEverywhere === 'function') {
-                                const hit = findByIdEverywhere(id);
-                                if (hit) return hit;
-                            }
-                        } catch (e) { /* no-op */ }
-
-                        try {
-                            const direct = document.getElementById(id);
-                            if (direct) return direct;
-                        } catch (e) { /* no-op */ }
-
-                        try {
-                            const dataMatch = document.querySelector(`[data-dr-paragraph-id="${CSS.escape(id)}"]`);
-                            if (dataMatch) return dataMatch;
-                        } catch (e) { /* no-op */ }
-
-                        return null;
-                    };
-
-                    let el = findTarget(paragraphId);
-                    if (!el) {
-                        // 很多网站元素原本有 id，addParagraphIds 只写 data-dr-paragraph-id，需确保已执行过
-                        try { await addParagraphIds(); } catch (e) { /* no-op */ }
-                        el = findTarget(paragraphId);
-                    }
-
-                    if (el && el.scrollIntoView) {
-                        try { el.classList.add('deepread-highlight'); } catch (e) { /* no-op */ }
-                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        sendResponse({ ok: true });
-                    } else {
-                        sendResponse({ ok: false, error: `paragraph not found: ${paragraphId}` });
-                    }
-                } catch (err) {
-                    sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
-                }
-            })();
-            return true;
-        }
-
-        if (request.action === 'deepread_sp_copy_importable') {
-            exportChatHistoryForImport();
-            sendResponse({ ok: true });
-            return true;
-        }
-
-        if (request.action === 'deepread_sp_append_imported') {
-            (async () => {
-                try {
-                    if (request.imported && typeof request.imported === 'object') {
-                        // 侧栏直接传入 JSON
-                        const data = request.imported;
-                        if (!data || data.schema !== 'deepread.chat.export.v1') {
-                            throw new Error('不是 DeepRead 可导入对话格式');
-                        }
-                        if (!Array.isArray(data.messages) || data.messages.length === 0) {
-                            throw new Error('导入内容中没有 messages');
-                        }
-
-                        const exportId = String(data.exportId || '');
-                        if (exportId && importedExportIds.has(exportId)) {
-                            throw new Error('该对话已在本标签页导入过');
-                        }
-
-                        for (const msg of data.messages) {
-                            const role = msg && msg.role === 'user' ? 'user' : 'assistant';
-                            const content = msg && msg.content ? String(msg.content) : '';
-                            if (!content.trim()) continue;
-                            chatHistory.push({
-                                role,
-                                rawMessage: content,
-                                message: role === 'assistant' ? processChatResponse(content) : content,
-                                messageId: generateUniqueId(),
-                            });
-                        }
-
-                        if (exportId) importedExportIds.add(exportId);
-                        if (CHAT_PERSIST_ENABLED) {
-                            await saveTabChatHistory(chatHistory);
-                        }
-                    } else {
-                        // 兼容旧逻辑：从剪贴板读
-                        await appendImportedChatFromClipboard();
-                    }
-                    sendResponse({ ok: true });
-                } catch (err) {
-                    sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
-                }
-            })();
-            return true;
-        }
-
         if (request.action === 'startReading') {
             console.log('收到startReading消息');
             // 检查页面是否已经分析过
@@ -1317,13 +948,13 @@ if (isExtensionEnvironment) {
                 
                 // 确保面板存在
                 if (!document.getElementById('deepread-container')) {
-                    if (!INPAGE_PANEL_DISABLED) createDeepReadPanel();
+                    createDeepReadPanel();
                     // addParagraphIds();
                     addTextSelectionListener();
                 }
                 
                 // 显示面板
-                if (!INPAGE_PANEL_DISABLED) toggleDeepReadPanel();
+                toggleDeepReadPanel();
 
                 // popup “开始深度阅读”明确要求打开 minimap（即使用户之前关闭过）
                 showDeepReadMinimapPinned(true);
@@ -1343,35 +974,31 @@ if (isExtensionEnvironment) {
                             console.log('缓存加载失败或缓存内容不完整，使用当前内存中的数据');
                         }
                         // 全文分析结果
-                        if (!INPAGE_PANEL_DISABLED) {
-                            showAnalysisResults({
-                                summary: pageSummary,
-                                keyTerms: pageKeyTerms,
-                                keyParagraphs: pageKeyParagraphs
-                            });
-                        }
+                        showAnalysisResults({
+                            summary: pageSummary,
+                            keyTerms: pageKeyTerms,
+                            keyParagraphs: pageKeyParagraphs
+                        });
                     })
                     .catch(error => {
                         console.error('加载缓存内容失败:', error);
                         // 出错时使用当前内存中的数据
-                        if (!INPAGE_PANEL_DISABLED) {
-                            showAnalysisResults({
-                                summary: pageSummary,
-                                keyTerms: pageKeyTerms,
-                                keyParagraphs: pageKeyParagraphs
-                            });
-                        }
+                        showAnalysisResults({
+                            summary: pageSummary,
+                            keyTerms: pageKeyTerms,
+                            keyParagraphs: pageKeyParagraphs
+                        });
                     });
                 sendResponse({status: 'success', message: '从缓存恢复分析结果'});
 
             } else {
                 console.log('页面没有分析过，Starting deep reading...');
                 // 创建面板，让用户预览内容并手动确认分析
-                if (!INPAGE_PANEL_DISABLED) createDeepReadPanel();
+                createDeepReadPanel();
                 // 添加文本选择事件监听
                 addTextSelectionListener();
                 // 显示面板
-                if (!INPAGE_PANEL_DISABLED) toggleDeepReadPanel();
+                toggleDeepReadPanel();
 
                 // popup “开始深度阅读”明确要求打开 minimap（即使用户之前关闭过）
                 showDeepReadMinimapPinned(true);
@@ -1387,12 +1014,12 @@ if (isExtensionEnvironment) {
             }
         } else if (request.action === 'togglePanel') {
             console.log('Toggling panel...');
-            if (!INPAGE_PANEL_DISABLED) toggleDeepReadPanel();
+            toggleDeepReadPanel();
             sendResponse({status: 'success', message: '面板显示状态已切换'});
         } else if (request.action === 'showSettings') {
             console.log('Showing settings panel...');
             // 创建并显示设置面板
-            if (!INPAGE_PANEL_DISABLED) createSettingsPanel();
+            createSettingsPanel();
             sendResponse({status: 'success', message: '设置面板已显示'});
         }
         return true; // 保持消息通道打开以便异步响应
@@ -1401,9 +1028,6 @@ if (isExtensionEnvironment) {
 
 // 页面加载时 创建DeepRead面板（核心代码）
 function createDeepReadPanel() {
-    if (INPAGE_PANEL_DISABLED) {
-        return;
-    }
     // 检查是否已存在面板
     if (document.getElementById('deepread-panel')) {
         return;
@@ -1602,9 +1226,6 @@ function createToggleButton() {
 
 // 切换面板显示/隐藏
 function toggleDeepReadPanel() {
-    if (INPAGE_PANEL_DISABLED) {
-        return;
-    }
     let container = document.getElementById('deepread-container');
     
     // 如果面板不存在，先创建面板
@@ -3967,9 +3588,6 @@ async function callAnalyzeContent(content, language) {
 
 // 显示LLM全文分析结果 analyzeContent -> showAnalysisResults
 function showAnalysisResults(analysisResult) {
-    if (INPAGE_PANEL_DISABLED) {
-        return;
-    }
     // debugLog('全文分析结果:', analysisResult);
     
     // 确保面板存在并可见
@@ -4692,9 +4310,6 @@ function processLLMExplanation(llmResponse, conceptName) {
 
 // 更新解释区域
 function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey) {
-    if (INPAGE_PANEL_DISABLED) {
-        return;
-    }
     const content = document.getElementById('deepread-content');
     if (!content) return;
     
@@ -5278,34 +4893,26 @@ async function chatWithAI(userMessage, chatHistory = [], pageContent = '', image
         
         // 返回一个Promise，在流式响应完成时解析
         return new Promise((resolve, reject) => {
-            const shouldRenderInPage = !INPAGE_PANEL_DISABLED && !!document.getElementById('deepread-chat-messages');
-
-            // 仅网页内面板模式才创建/更新 DOM 消息；Side Panel 模式下走纯逻辑路径
-            const messageId = shouldRenderInPage ? addChatMessage('', 'assistant', true) : null;
-            if (shouldRenderInPage && !messageId) {
+            // 使用现有的addChatMessage创建一个预加载状态的消息（核心代码）
+            const messageId = addChatMessage('', 'assistant', true);
+            if (!messageId) {
                 reject(new Error('创建聊天消息失败'));
                 return;
             }
             
             let accumulatedText = '';
-            const converter = (shouldRenderInPage && typeof showdown !== 'undefined')
-                ? new showdown.Converter({
-                    tables: true,
-                    simplifiedAutoLink: true,
-                    strikethrough: true,
-                    tasklists: true
-                })
-                : null;
+            const converter = new showdown.Converter({
+                tables: true,
+                simplifiedAutoLink: true,
+                strikethrough: true,
+                tasklists: true
+            });
             
             // 定义每个数据块的回调函数
             const onChunk = (chunkText) => {
                 // 累积文本
                 accumulatedText += chunkText;
-
-                if (!shouldRenderInPage || !messageId || !converter) {
-                    return;
-                }
-
+                
                 // 实时更新UI
                 const messageElement = document.getElementById(messageId);
                 if (messageElement) {
@@ -5331,13 +4938,6 @@ async function chatWithAI(userMessage, chatHistory = [], pageContent = '', image
             
             // 定义完成回调函数
             const onComplete = (processedResponse) => {
-                // 解析Promise，返回处理后的响应
-                resolve(processedResponse);
-
-                if (!shouldRenderInPage || !messageId) {
-                    return;
-                }
-
                 // 更新最终的消息内容
                 const messageElement = document.getElementById(messageId);
                 if (messageElement) {
@@ -5383,6 +4983,9 @@ async function chatWithAI(userMessage, chatHistory = [], pageContent = '', image
                     // 滚动到最新消息
                     messageElement.scrollIntoView({ behavior: 'smooth', block: 'end' });
                 }
+                
+                // 解析Promise，返回处理后的响应
+                resolve(processedResponse);
 
                 // 移除
                 removeChatMessage(messageId);
@@ -5391,38 +4994,36 @@ async function chatWithAI(userMessage, chatHistory = [], pageContent = '', image
             // 定义错误回调函数
             const onError = (error) => {
                 console.error('流式聊天API调用错误:', error);
-
-                if (shouldRenderInPage && messageId) {
-                    // 更新UI显示错误
-                    const messageElement = document.getElementById(messageId);
-                    if (messageElement) {
-                        // 获取或创建消息文本元素
-                        let textElement = messageElement.querySelector('.message-text-content');
-                        if (!textElement) {
-                            textElement = document.createElement('div');
-                            textElement.className = 'message-text-content';
-                            messageElement.appendChild(textElement);
-                        }
-                        
-                        // 移除加载标识并添加错误样式
-                        messageElement.classList.remove('loading');
-                        messageElement.classList.add('error');
-                        
-                        // 显示错误信息
-                        textElement.innerHTML = `<p>出错了: ${error.message || '未知错误'}</p>`;
-                        
-                        // 为消息添加操作按钮
-                        const actionsContainer = createChatMessageActions(messageId, `出错了: ${error.message || '未知错误'}`, 'assistant');
-                        
-                        // 移除现有的操作按钮容器（如果有）
-                        const existingActions = messageElement.querySelector('.message-actions');
-                        if (existingActions) {
-                            existingActions.remove();
-                        }
-                        
-                        // 添加新的操作按钮容器
-                        messageElement.appendChild(actionsContainer);
+                
+                // 更新UI显示错误
+                const messageElement = document.getElementById(messageId);
+                if (messageElement) {
+                    // 获取或创建消息文本元素
+                    let textElement = messageElement.querySelector('.message-text-content');
+                    if (!textElement) {
+                        textElement = document.createElement('div');
+                        textElement.className = 'message-text-content';
+                        messageElement.appendChild(textElement);
                     }
+                    
+                    // 移除加载标识并添加错误样式
+                    messageElement.classList.remove('loading');
+                    messageElement.classList.add('error');
+                    
+                    // 显示错误信息
+                    textElement.innerHTML = `<p>出错了: ${error.message || '未知错误'}</p>`;
+                    
+                    // 为消息添加操作按钮
+                    const actionsContainer = createChatMessageActions(messageId, `出错了: ${error.message || '未知错误'}`, 'assistant');
+                    
+                    // 移除现有的操作按钮容器（如果有）
+                    const existingActions = messageElement.querySelector('.message-actions');
+                    if (existingActions) {
+                        existingActions.remove();
+                    }
+                    
+                    // 添加新的操作按钮容器
+                    messageElement.appendChild(actionsContainer);
                 }
                 
                 // 返回错误信息

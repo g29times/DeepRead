@@ -1,0 +1,543 @@
+let activeTabId = null;
+let lastConceptName = '';
+let lastConceptExplanation = '';
+let lastSummary = '';
+let lastSeenTabUrl = '';
+
+function qs(id) {
+  return document.getElementById(id);
+}
+
+function bindTabSyncEvents() {
+  try {
+    chrome.tabs.onActivated.addListener(async () => {
+      await forceUpdateActiveTabId();
+      try {
+        lastSeenTabUrl = await getActiveTabUrl();
+      } catch (e) {
+        // ignore
+      }
+      await refreshState();
+    });
+
+    chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+      // 当前活动 tab 导航完成后刷新；避免加载中频繁刷新
+      if (typeof activeTabId !== 'number' || tabId !== activeTabId) return;
+      if (changeInfo && changeInfo.status === 'complete') {
+        await forceUpdateActiveTabId();
+        await refreshState();
+      }
+    });
+  } catch (e) {
+    // ignore
+  }
+}
+
+function startUrlWatcher() {
+  try {
+    setInterval(async () => {
+      try {
+        const url = await getActiveTabUrl();
+        if (url && url !== lastSeenTabUrl) {
+          lastSeenTabUrl = url;
+          await hardRefresh();
+        }
+      } catch (e) {
+        // ignore
+      }
+    }, 900);
+  } catch (e) {
+    // ignore
+  }
+}
+
+async function insertSummaryToChat() {
+  if (!lastSummary) {
+    alert('当前没有可插入的全文解释。');
+    return;
+  }
+  const rawMessage = `全文解释：\n${lastSummary}`;
+  const resp = await sendToContent('deepread_sp_append_chat_message', { role: 'assistant', rawMessage });
+  if (resp && resp.ok) {
+    renderChat(resp.chatHistory || []);
+  } else {
+    await refreshState();
+  }
+}
+
+async function getActiveTabId() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = tabs && tabs[0];
+  activeTabId = tab && typeof tab.id === 'number' ? tab.id : null;
+  return activeTabId;
+}
+
+async function forceUpdateActiveTabId() {
+  activeTabId = null;
+  return await getActiveTabId();
+}
+
+async function getActiveTabUrl() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = tabs && tabs[0];
+  const url = tab && tab.url ? String(tab.url) : '';
+  return url;
+}
+
+async function sendToContent(action, payload = {}) {
+  const tabId = await getActiveTabId();
+  if (typeof tabId !== 'number') throw new Error('No active tab');
+
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, { action, ...payload }, (resp) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(resp);
+    });
+  });
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function renderMeta(meta) {
+  const el = qs('drsp-meta');
+  if (!el) return;
+  if (!meta) {
+    el.textContent = '';
+    return;
+  }
+  const title = meta.title ? String(meta.title) : '';
+  const url = meta.url ? String(meta.url) : '';
+  el.innerHTML = `${escapeHtml(title)}<br/>${escapeHtml(url)}`;
+}
+
+function renderChat(history) {
+  const container = qs('drsp-messages');
+  if (!container) return;
+  container.innerHTML = '';
+  (history || []).forEach((m) => {
+    const messageId = m && m.messageId ? String(m.messageId) : '';
+    const raw = String(m.rawMessage || m.message || '');
+
+    const div = document.createElement('div');
+    div.className = `drsp-msg ${m.role === 'user' ? 'drsp-msg-user' : 'drsp-msg-assistant'}`;
+
+    const content = document.createElement('div');
+    content.className = 'drsp-msg-content';
+    content.textContent = raw;
+    div.appendChild(content);
+
+    const actions = document.createElement('div');
+    actions.className = 'drsp-msg-actions';
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'drsp-msg-action';
+    copyBtn.textContent = '复制';
+    copyBtn.addEventListener('click', async () => {
+      await writeToClipboardWithFallback(raw);
+    });
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'drsp-msg-action';
+    delBtn.textContent = '删除';
+    delBtn.disabled = !messageId;
+    delBtn.addEventListener('click', async () => {
+      if (!messageId) return;
+      const ok = confirm('确认删除这条消息？');
+      if (!ok) return;
+      const resp = await sendToContent('deepread_sp_delete_chat_message', { messageId });
+      if (resp && resp.ok) {
+        renderChat(resp.chatHistory || []);
+      } else {
+        await refreshState();
+      }
+    });
+
+    actions.appendChild(copyBtn);
+    actions.appendChild(delBtn);
+    div.appendChild(actions);
+
+    container.appendChild(div);
+  });
+  container.scrollTop = container.scrollHeight;
+}
+
+function renderParagraphs(targetId, paragraphs) {
+  const container = qs(targetId);
+  if (!container) return;
+  container.innerHTML = '';
+
+  (paragraphs || []).forEach((p) => {
+    const pid = p && typeof p === 'object' ? p.id : String(p);
+    const reason = p && typeof p === 'object' ? (p.reason || '') : '';
+    const score = p && typeof p === 'object' ? p.relevanceScore : null;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'drsp-paragraph';
+
+    const top = document.createElement('div');
+    top.className = 'drsp-paragraph-top';
+
+    const left = document.createElement('div');
+    left.className = 'drsp-paragraph-id';
+    left.textContent = pid;
+
+    const right = document.createElement('div');
+    right.className = 'drsp-paragraph-score';
+    if (typeof score === 'number') {
+      right.textContent = `相关度 ${(Math.max(0, Math.min(1, score)) * 100).toFixed(0)}%`;
+    }
+
+    top.appendChild(left);
+    top.appendChild(right);
+
+    const reasonEl = document.createElement('div');
+    reasonEl.className = 'drsp-paragraph-reason';
+    reasonEl.textContent = String(reason || '');
+
+    const actions = document.createElement('div');
+    actions.className = 'drsp-paragraph-actions';
+
+    const navBtn = document.createElement('button');
+    navBtn.className = 'drsp-btn';
+    navBtn.textContent = '跳转';
+    navBtn.addEventListener('click', async () => {
+      await sendToContent('deepread_sp_navigate', { paragraphId: pid });
+    });
+
+    const explainBtn = document.createElement('button');
+    explainBtn.className = 'drsp-btn';
+    explainBtn.textContent = '解释此段';
+    explainBtn.addEventListener('click', async () => {
+      await explainConcept(String(pid));
+    });
+
+    actions.appendChild(navBtn);
+    actions.appendChild(explainBtn);
+
+    wrap.appendChild(top);
+    if (reason) wrap.appendChild(reasonEl);
+    wrap.appendChild(actions);
+
+    container.appendChild(wrap);
+  });
+}
+
+function renderAnalysis(analysis) {
+  lastSummary = (analysis && analysis.summary) ? String(analysis.summary) : '';
+  qs('drsp-summary').textContent = lastSummary;
+
+  const keyterms = qs('drsp-keyterms');
+  if (keyterms) {
+    keyterms.innerHTML = '';
+    (analysis && analysis.keyTerms ? analysis.keyTerms : []).forEach((t) => {
+      const chip = document.createElement('button');
+      chip.className = 'drsp-chip';
+      chip.textContent = String(t);
+      chip.addEventListener('click', async () => {
+        await explainConcept(String(t));
+      });
+      keyterms.appendChild(chip);
+    });
+  }
+
+  renderParagraphs('drsp-keyparagraphs', analysis && analysis.keyParagraphs ? analysis.keyParagraphs : []);
+}
+
+function clearAnalysisUI() {
+  lastSummary = '';
+  lastConceptName = '';
+  lastConceptExplanation = '';
+  qs('drsp-summary').textContent = '';
+  qs('drsp-keyterms').innerHTML = '';
+  qs('drsp-keyparagraphs').innerHTML = '';
+  qs('drsp-concept-title').textContent = '';
+  qs('drsp-concept').textContent = '';
+  qs('drsp-relatedparagraphs').innerHTML = '';
+}
+
+function renderConcept(conceptName, resp) {
+  qs('drsp-concept-title').textContent = conceptName ? String(conceptName) : '';
+  qs('drsp-concept').textContent = resp && resp.explanation ? String(resp.explanation) : '';
+  lastConceptName = conceptName ? String(conceptName) : '';
+  lastConceptExplanation = resp && resp.explanation ? String(resp.explanation) : '';
+  renderParagraphs('drsp-relatedparagraphs', resp && resp.relatedParagraphs ? resp.relatedParagraphs : []);
+}
+
+async function refreshState() {
+  const resp = await sendToContent('deepread_sp_get_state');
+  if (resp && resp.ok) {
+    renderMeta(resp.pageMeta);
+    renderChat(resp.chatHistory || []);
+    if (resp.analysisResult) {
+      renderAnalysis(resp.analysisResult);
+    } else {
+      clearAnalysisUI();
+    }
+  }
+}
+
+async function hardRefresh() {
+  await forceUpdateActiveTabId();
+  try {
+    lastSeenTabUrl = await getActiveTabUrl();
+  } catch (e) {
+    // ignore
+  }
+  await refreshState();
+}
+
+async function analyzeFull() {
+  const resp = await sendToContent('deepread_sp_analyze_full');
+  if (resp && resp.ok) {
+    renderAnalysis(resp.analysisResult);
+    await refreshState();
+  }
+}
+
+async function explainConcept(conceptName) {
+  const resp = await sendToContent('deepread_sp_explain', { conceptName });
+  if (resp && resp.ok) {
+    renderConcept(conceptName, resp.conceptResult);
+    await refreshState();
+  }
+}
+
+async function sendChat() {
+  const input = qs('drsp-input');
+  const text = input ? input.value.trim() : '';
+  if (!text) return;
+
+  if (input) input.value = '';
+
+  const resp = await sendToContent('deepread_sp_chat_send', { message: text });
+  if (resp && resp.ok) {
+    renderChat(resp.chatHistory || []);
+  } else {
+    await refreshState();
+  }
+}
+
+async function copyImportableChat() {
+  const resp = await sendToContent('deepread_sp_get_state');
+  if (!resp || !resp.ok) return;
+  const chatHistory = resp.chatHistory || [];
+  if (!chatHistory.length) {
+    alert('当前没有可复制的对话内容。');
+    return;
+  }
+
+  const exportData = {
+    schema: 'deepread.chat.export.v1',
+    exportId: `sp_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    exportedAt: Date.now(),
+    source: {
+      url: resp.pageMeta && resp.pageMeta.url ? String(resp.pageMeta.url) : '',
+      title: resp.pageMeta && resp.pageMeta.title ? String(resp.pageMeta.title) : '',
+    },
+    messages: chatHistory.map((item) => ({
+      id: item.messageId || `spm_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      role: item.role === 'user' ? 'user' : 'assistant',
+      content: String(item.rawMessage || item.message || '').trim(),
+    })),
+  };
+
+  const jsonText = JSON.stringify(exportData);
+  await writeToClipboardWithFallback(jsonText);
+}
+
+async function appendImportableChat() {
+  const text = await showTextInputDialog('追加导入', '请粘贴 DeepRead 可导入 JSON：');
+  if (!text || !text.trim()) return;
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    alert('内容不是有效 JSON。');
+    return;
+  }
+  const resp = await sendToContent('deepread_sp_append_imported', { imported: data });
+  if (resp && resp.ok) {
+    await refreshState();
+  } else {
+    alert(resp && resp.error ? String(resp.error) : '追加导入失败');
+  }
+}
+
+async function clearChat() {
+  const resp = await sendToContent('deepread_sp_clear_chat');
+  if (resp && resp.ok) {
+    await refreshState();
+  }
+}
+
+function bindEvents() {
+  qs('drsp-analyze').addEventListener('click', analyzeFull);
+  qs('drsp-refresh').addEventListener('click', hardRefresh);
+  qs('drsp-send').addEventListener('click', sendChat);
+  qs('drsp-clear').addEventListener('click', clearChat);
+  qs('drsp-copy').addEventListener('click', copyImportableChat);
+  qs('drsp-append').addEventListener('click', appendImportableChat);
+  qs('drsp-insert-summary').addEventListener('click', insertSummaryToChat);
+  qs('drsp-insert-concept').addEventListener('click', insertConceptToChat);
+
+  const input = qs('drsp-input');
+  if (input) {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.shiftKey) {
+        e.preventDefault();
+        sendChat();
+      }
+    });
+  }
+}
+
+async function insertConceptToChat() {
+  if (!lastConceptName || !lastConceptExplanation) {
+    alert('当前没有可插入的概念解释。');
+    return;
+  }
+  const rawMessage = `概念：${lastConceptName}\n\n解释：\n${lastConceptExplanation}`;
+  const resp = await sendToContent('deepread_sp_append_chat_message', { role: 'assistant', rawMessage });
+  if (resp && resp.ok) {
+    renderChat(resp.chatHistory || []);
+  } else {
+    await refreshState();
+  }
+}
+
+async function writeToClipboardWithFallback(text) {
+  const s = String(text == null ? '' : text);
+  try {
+    await navigator.clipboard.writeText(s);
+    alert('已复制到剪贴板。');
+    return;
+  } catch (e) {
+    // fallback
+  }
+
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = s;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '-9999px';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    if (ok) {
+      alert('已复制到剪贴板。');
+      return;
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  await showTextInputDialog('复制失败', '浏览器限制导致无法自动复制，请手动复制以下内容：', s);
+}
+
+async function showTextInputDialog(title, message, presetValue = '') {
+  const overlay = document.createElement('div');
+  overlay.style.position = 'fixed';
+  overlay.style.left = '0';
+  overlay.style.top = '0';
+  overlay.style.right = '0';
+  overlay.style.bottom = '0';
+  overlay.style.background = 'rgba(0,0,0,0.25)';
+  overlay.style.zIndex = '999999';
+  overlay.style.display = 'flex';
+  overlay.style.alignItems = 'center';
+  overlay.style.justifyContent = 'center';
+
+  const card = document.createElement('div');
+  card.style.width = '92%';
+  card.style.maxWidth = '520px';
+  card.style.background = '#fff';
+  card.style.border = '1px solid #e5e7eb';
+  card.style.borderRadius = '12px';
+  card.style.padding = '12px';
+  card.style.boxSizing = 'border-box';
+  card.style.display = 'flex';
+  card.style.flexDirection = 'column';
+  card.style.gap = '10px';
+
+  const h = document.createElement('div');
+  h.textContent = String(title || '');
+  h.style.fontWeight = '700';
+  h.style.fontSize = '13px';
+
+  const p = document.createElement('div');
+  p.textContent = String(message || '');
+  p.style.fontSize = '12px';
+  p.style.color = '#374151';
+  p.style.whiteSpace = 'pre-wrap';
+
+  const ta = document.createElement('textarea');
+  ta.value = presetValue || '';
+  ta.rows = 8;
+  ta.style.width = '100%';
+  ta.style.boxSizing = 'border-box';
+  ta.style.border = '1px solid #e5e7eb';
+  ta.style.borderRadius = '10px';
+  ta.style.padding = '8px';
+  ta.style.fontSize = '12px';
+  ta.style.resize = 'vertical';
+
+  const actions = document.createElement('div');
+  actions.style.display = 'flex';
+  actions.style.justifyContent = 'flex-end';
+  actions.style.gap = '8px';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'drsp-btn';
+  cancelBtn.textContent = '取消';
+
+  const okBtn = document.createElement('button');
+  okBtn.className = 'drsp-btn drsp-primary';
+  okBtn.textContent = '确定';
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(okBtn);
+
+  card.appendChild(h);
+  card.appendChild(p);
+  card.appendChild(ta);
+  card.appendChild(actions);
+
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+
+  setTimeout(() => {
+    try { ta.focus(); ta.select(); } catch (e) { /* no-op */ }
+  }, 0);
+
+  return new Promise((resolve) => {
+    const cleanup = (val) => {
+      try { document.body.removeChild(overlay); } catch (e) { /* no-op */ }
+      resolve(val);
+    };
+    cancelBtn.addEventListener('click', () => cleanup(''));
+    okBtn.addEventListener('click', () => cleanup(String(ta.value || '')));
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) cleanup('');
+    });
+  });
+}
+
+(async function main() {
+  bindEvents();
+  bindTabSyncEvents();
+  await hardRefresh();
+  startUrlWatcher();
+})();

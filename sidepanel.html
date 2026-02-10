@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DeepRead Side Panel</title>
+    <link rel="stylesheet" href="deepread.css" />
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <div class="drsp-root">
+      <div class="drsp-header">
+        <div class="drsp-title">DeepRead</div>
+        <div class="drsp-header-actions">
+          <button class="drsp-btn" id="drsp-analyze">全文分析</button>
+          <button class="drsp-btn" id="drsp-refresh">刷新</button>
+        </div>
+      </div>
+
+      <!-- <div class="drsp-meta" id="drsp-meta"></div> -->
+
+      <div class="drsp-section" id="drsp-analysis">
+        <div class="drsp-analysis-header">
+          <div class="drsp-section-title">解释区</div>
+          <div class="drsp-analysis-actions">
+            <button class="drsp-btn" id="drsp-insert-summary">插入全文解释</button>
+            <button class="drsp-btn" id="drsp-insert-concept">插入概念解释</button>
+          </div>
+        </div>
+        <div class="drsp-analysis-summary" id="drsp-summary"></div>
+        <div class="drsp-subtitle">相关概念</div>
+        <div class="drsp-chips" id="drsp-keyterms"></div>
+        <div class="drsp-subtitle">关键段落</div>
+        <div class="drsp-paragraphs" id="drsp-keyparagraphs"></div>
+
+        <div class="drsp-subtitle">概念解释</div>
+        <div class="drsp-concept-title" id="drsp-concept-title"></div>
+        <div class="drsp-concept" id="drsp-concept"></div>
+        <div class="drsp-subtitle">相关段落</div>
+        <div class="drsp-paragraphs" id="drsp-relatedparagraphs"></div>
+      </div>
+
+      <div class="drsp-section drsp-chat" id="drsp-chat">
+        <div class="drsp-section-title">对话区</div>
+        <div class="drsp-chat-messages" id="drsp-messages"></div>
+        <div class="drsp-chat-input">
+          <textarea id="drsp-input" rows="2" placeholder="输入你的问题... (Shift+Enter 发送)"></textarea>
+          <div class="drsp-chat-actions">
+            <button class="drsp-btn" id="drsp-copy">导出</button>
+            <button class="drsp-btn" id="drsp-append">导入</button>
+            <button class="drsp-btn" id="drsp-clear">清空</button>
+            <button class="drsp-btn drsp-primary" id="drsp-send">发送</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
