@@ -3,9 +3,64 @@ let lastConceptName = '';
 let lastConceptExplanation = '';
 let lastSummary = '';
 let lastSeenTabUrl = '';
+const DRSP_FONT_SIZE_KEY = 'deepread_sp_font_size_px';
+const DRSP_FONT_SIZE_OPTIONS = [12, 14, 16, 18];
 
 function qs(id) {
   return document.getElementById(id);
+}
+
+function normalizeFontSizePx(px) {
+  const n = Number(px);
+  if (!Number.isFinite(n)) return 14;
+  const v = Math.round(n);
+  if (DRSP_FONT_SIZE_OPTIONS.includes(v)) return v;
+  // 找最近档位
+  let best = 14;
+  let bestDist = Infinity;
+  for (const opt of DRSP_FONT_SIZE_OPTIONS) {
+    const d = Math.abs(opt - v);
+    if (d < bestDist) {
+      bestDist = d;
+      best = opt;
+    }
+  }
+  return best;
+}
+
+function applyFontSizePx(px) {
+  const v = normalizeFontSizePx(px);
+  document.documentElement.style.setProperty('--drsp-font-size', `${v}px`);
+  const sel = qs('drsp-font-select');
+  if (sel) sel.value = String(v);
+  return v;
+}
+
+async function loadFontSizeSetting() {
+  applyFontSizePx(14);
+  try {
+    const obj = await chrome.storage.local.get([DRSP_FONT_SIZE_KEY]);
+    const px = obj && obj[DRSP_FONT_SIZE_KEY];
+    applyFontSizePx(px);
+  } catch (e) {
+    applyFontSizePx(14);
+  }
+}
+
+let __saveFontTimer = null;
+function scheduleSaveFontSize(px) {
+  try {
+    if (__saveFontTimer) clearTimeout(__saveFontTimer);
+    __saveFontTimer = setTimeout(async () => {
+      try {
+        await chrome.storage.local.set({ [DRSP_FONT_SIZE_KEY]: px });
+      } catch (e) {
+        // ignore
+      }
+    }, 120);
+  } catch (e) {
+    // ignore
+  }
 }
 
 function bindTabSyncEvents() {
@@ -381,6 +436,13 @@ async function clearChat() {
 }
 
 function bindEvents() {
+  const sel = qs('drsp-font-select');
+  if (sel) {
+    sel.addEventListener('change', () => {
+      const px = applyFontSizePx(sel.value);
+      scheduleSaveFontSize(px);
+    });
+  }
   qs('drsp-analyze').addEventListener('click', analyzeFull);
   qs('drsp-refresh').addEventListener('click', hardRefresh);
   qs('drsp-send').addEventListener('click', sendChat);
@@ -536,6 +598,7 @@ async function showTextInputDialog(title, message, presetValue = '') {
 }
 
 (async function main() {
+  await loadFontSizeSetting();
   bindEvents();
   bindTabSyncEvents();
   await hardRefresh();
