@@ -320,6 +320,93 @@ function clearAnalysisUI() {
   qs('drsp-relatedparagraphs').innerHTML = '';
 }
 
+function openManualAnalyzeModal() {
+  const overlay = document.createElement('div');
+  overlay.className = 'drsp-modal-overlay';
+
+  const modal = document.createElement('div');
+  modal.className = 'drsp-modal';
+
+  const title = document.createElement('div');
+  title.className = 'drsp-modal-title';
+  title.textContent = '手动分析';
+
+  const desc = document.createElement('div');
+  desc.className = 'drsp-modal-desc';
+  desc.textContent = '适用于视频字幕、图片内容等页面无法提取正文的场景：把字幕/文本粘贴到下面，确认后将调用模型进行全文解读。';
+
+  const textarea = document.createElement('textarea');
+  textarea.className = 'drsp-modal-textarea';
+  textarea.placeholder = '在此粘贴字幕或文本…';
+
+  const actions = document.createElement('div');
+  actions.className = 'drsp-modal-actions';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'drsp-btn';
+  closeBtn.textContent = '关闭';
+
+  const okBtn = document.createElement('button');
+  okBtn.className = 'drsp-btn drsp-primary';
+  okBtn.textContent = '确认分析';
+
+  actions.appendChild(closeBtn);
+  actions.appendChild(okBtn);
+
+  modal.appendChild(title);
+  modal.appendChild(desc);
+  modal.appendChild(textarea);
+  modal.appendChild(actions);
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  const cleanup = () => {
+    try { document.body.removeChild(overlay); } catch (e) { /* no-op */ }
+  };
+
+  closeBtn.addEventListener('click', cleanup);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) cleanup();
+  });
+
+  okBtn.addEventListener('click', async () => {
+    const text = String(textarea.value || '').trim();
+    if (!text) {
+      alert('请输入要分析的文本。');
+      return;
+    }
+    okBtn.disabled = true;
+    closeBtn.disabled = true;
+    okBtn.textContent = '分析中...';
+
+    try {
+      const resp = await sendToContent('deepread_sp_analyze_text', { text });
+      if (resp && resp.ok) {
+        if (resp.analysisResult) {
+          renderAnalysis(resp.analysisResult);
+        }
+        await refreshState();
+        cleanup();
+      } else {
+        alert(resp && resp.error ? String(resp.error) : '分析失败');
+        okBtn.disabled = false;
+        closeBtn.disabled = false;
+        okBtn.textContent = '确认分析';
+      }
+    } catch (e) {
+      alert(String(e && e.message ? e.message : e));
+      okBtn.disabled = false;
+      closeBtn.disabled = false;
+      okBtn.textContent = '确认分析';
+    }
+  });
+
+  setTimeout(() => {
+    try { textarea.focus(); } catch (e) { /* no-op */ }
+  }, 0);
+}
+
 function renderConcept(conceptName, resp) {
   qs('drsp-concept-title').textContent = conceptName ? String(conceptName) : '';
   qs('drsp-concept').textContent = resp && resp.explanation ? String(resp.explanation) : '';
@@ -349,6 +436,32 @@ async function hardRefresh() {
     // ignore
   }
   await refreshState();
+}
+
+let __configWindowId = null;
+async function openConfigWindow() {
+  try {
+    if (typeof __configWindowId === 'number') {
+      try {
+        await chrome.windows.update(__configWindowId, { focused: true });
+        return;
+      } catch (e) {
+        __configWindowId = null;
+      }
+    }
+
+    const url = chrome.runtime.getURL('popup.html');
+    const w = await chrome.windows.create({
+      url,
+      type: 'popup',
+      width: 380,
+      height: 640,
+      focused: true,
+    });
+    __configWindowId = w && typeof w.id === 'number' ? w.id : null;
+  } catch (e) {
+    alert(String(e && e.message ? e.message : e));
+  }
 }
 
 async function analyzeFull() {
@@ -444,7 +557,10 @@ function bindEvents() {
     });
   }
   qs('drsp-analyze').addEventListener('click', analyzeFull);
+  qs('drsp-manual-analyze').addEventListener('click', openManualAnalyzeModal);
   qs('drsp-refresh').addEventListener('click', hardRefresh);
+  const cfg = qs('drsp-config');
+  if (cfg) cfg.addEventListener('click', openConfigWindow);
   qs('drsp-send').addEventListener('click', sendChat);
   qs('drsp-clear').addEventListener('click', clearChat);
   qs('drsp-copy').addEventListener('click', copyImportableChat);

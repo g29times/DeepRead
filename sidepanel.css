@@ -287,6 +287,64 @@ body {
   gap: 6px;
 }
 
+.drsp-modal-overlay {
+  position: fixed;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.25);
+  z-index: 999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.drsp-modal {
+  width: 100%;
+  max-width: 560px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 12px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.drsp-modal-title {
+  font-weight: 800;
+  font-size: var(--drsp-font-lg);
+}
+
+.drsp-modal-desc {
+  font-size: var(--drsp-font-sm);
+  color: #374151;
+  line-height: 1.5;
+}
+
+.drsp-modal-textarea {
+  width: 100%;
+  min-height: 240px;
+  max-height: 60vh;
+  resize: vertical;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 10px;
+  box-sizing: border-box;
+  font-size: var(--drsp-font-sm);
+  line-height: 1.6;
+}
+
+.drsp-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .drsp-concept-title {
   margin-top: 6px;
   font-weight: 700;

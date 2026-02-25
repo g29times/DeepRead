@@ -499,7 +499,22 @@ function showDeepReadToast(text, type = 'info'){
 }
 
 // 发送笔记到飞书
-function getDeepReadFeishuWebhookUrl(){
+async function getDeepReadFeishuWebhookUrl(){
+    try{
+        if (isExtensionEnvironment && chrome.storage && chrome.storage.sync) {
+            const v = await new Promise(resolve => {
+                try{
+                    chrome.storage.sync.get(['deepread_feishu_webhook_url'], function(result) {
+                        resolve((result && result.deepread_feishu_webhook_url ? String(result.deepread_feishu_webhook_url) : '').trim());
+                    });
+                }catch{
+                    resolve('');
+                }
+            });
+            if (v) return v;
+        }
+    }catch{}
+
     try{
         return (localStorage.getItem('deepread_feishu_webhook_url') || '').trim();
     }catch{
@@ -536,7 +551,7 @@ async function copyHighlightToClipboard(highlight){
 }
 
 async function sendHighlightToFeishu(highlight){
-    const webhookUrl = getDeepReadFeishuWebhookUrl();
+    const webhookUrl = await getDeepReadFeishuWebhookUrl();
     if (!webhookUrl){
         showDeepReadToast('请先配置 deepread_feishu_webhook_url', 'error');
         return;
@@ -1097,6 +1112,56 @@ if (isExtensionEnvironment) {
                     });
                 } catch (err) {
                     console.error('SidePanel analyze_full failed:', err);
+                    sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
+                }
+            })();
+            return true;
+        }
+
+        if (request.action === 'deepread_sp_analyze_text') {
+            (async () => {
+                try {
+                    const text = String(request.text || '').trim();
+                    if (!text) {
+                        sendResponse({ ok: false, error: 'empty text' });
+                        return;
+                    }
+
+                    pageContent = text;
+                    const llmResponse = await callAnalyzeContent(pageContent, default_bot_language);
+
+                    pageSummary = llmResponse?.summary || pageSummaryFallback;
+                    pageKeyTerms = Array.isArray(llmResponse?.keyTerms) ? llmResponse.keyTerms : [];
+                    // 手动输入文本场景没有页面段落 ID 体系，避免返回无法跳转的 paragraphId
+                    pageKeyParagraphs = [];
+
+                    pageAnalyzed = true;
+                    try {
+                        if (window.cacheManager) {
+                            await window.cacheManager.savePageAnalyzedStatus(window.location.href, true);
+                            await window.cacheManager.savePageContent({
+                                url: window.location.href,
+                                title: document.title || '',
+                                content: pageContent,
+                                summary: pageSummary,
+                                keyTerms: pageKeyTerms,
+                                keyParagraphs: pageKeyParagraphs,
+                            });
+                        }
+                    } catch (e) {
+                        // ignore
+                    }
+
+                    sendResponse({
+                        ok: true,
+                        analysisResult: {
+                            summary: pageSummary,
+                            keyTerms: pageKeyTerms,
+                            keyParagraphs: pageKeyParagraphs,
+                        },
+                    });
+                } catch (err) {
+                    console.error('SidePanel analyze_text failed:', err);
                     sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
                 }
             })();
@@ -4380,41 +4445,109 @@ async function explainConcept(conceptName, element, options = {}) {
             // debugLog('概念键：', conceptKey);
             debugLog('解释概念：', displayName);
             
-            // 如果面板不存在，创建它
-            if (!document.getElementById('deepread-container')) {
-                createDeepReadPanel();
-            }
-            
-            // 确保面板可见
-            const panel = document.getElementById('deepread-container');
-            if (panel) {
-                panel.classList.remove('deepread-hidden');
-            }
-            
-            // 显示加载状态
-            let explanationDiv = document.getElementById('deepread-explanation-section-id');
-            if (!explanationDiv) {
-                // 刷新后直接触发解释：面板可能仍停留在“开始全文分析”着陆页，需要先渲染分析结果布局
-                if (pageAnalyzed) {
-                    try{
-                        debugLog('[Explain] explanationDiv missing; render analysis results layout first');
-                        showAnalysisResults({
-                            summary: pageSummary,
-                            keyTerms: pageKeyTerms,
-                            keyParagraphs: pageKeyParagraphs
-                        });
-                    }catch(err){
-                        console.warn('DeepRead: explainConcept 渲染分析布局失败:', err);
+            let explanationDiv = null;
+            let usePopup = false;
+            if (INPAGE_PANEL_DISABLED) {
+                usePopup = true;
+                let popup = document.getElementById('deepread-explain-popup');
+                if (!popup) {
+                    popup = document.createElement('div');
+                    popup.id = 'deepread-explain-popup';
+                    popup.style.position = 'fixed';
+                    popup.style.right = '12px';
+                    popup.style.bottom = '12px';
+                    popup.style.width = '360px';
+                    popup.style.maxWidth = 'calc(100vw - 24px)';
+                    popup.style.maxHeight = '55vh';
+                    popup.style.overflow = 'auto';
+                    popup.style.zIndex = '2147483647';
+                    popup.style.background = '#fff';
+                    popup.style.border = '1px solid #e5e7eb';
+                    popup.style.borderRadius = '12px';
+                    popup.style.boxShadow = '0 12px 30px rgba(0,0,0,0.12)';
+                    popup.style.fontSize = '12px';
+                    popup.style.lineHeight = '1.6';
+                    popup.style.color = '#111827';
+
+                    const header = document.createElement('div');
+                    header.style.display = 'flex';
+                    header.style.alignItems = 'center';
+                    header.style.justifyContent = 'space-between';
+                    header.style.gap = '8px';
+                    header.style.padding = '10px 10px 6px 10px';
+                    header.style.position = 'sticky';
+                    header.style.top = '0';
+                    header.style.background = '#fff';
+                    header.style.borderBottom = '1px solid #f3f4f6';
+
+                    const title = document.createElement('div');
+                    title.id = 'deepread-explain-popup-title';
+                    title.style.fontWeight = '700';
+                    title.style.fontSize = '12px';
+                    title.textContent = '解释';
+
+                    const closeBtn = document.createElement('button');
+                    closeBtn.type = 'button';
+                    closeBtn.textContent = '关闭';
+                    closeBtn.style.border = '1px solid #e5e7eb';
+                    closeBtn.style.background = '#fff';
+                    closeBtn.style.borderRadius = '10px';
+                    closeBtn.style.padding = '4px 8px';
+                    closeBtn.style.cursor = 'pointer';
+                    closeBtn.addEventListener('click', () => {
+                        try { popup.remove(); } catch (e) { /* no-op */ }
+                    });
+
+                    header.appendChild(title);
+                    header.appendChild(closeBtn);
+
+                    const body = document.createElement('div');
+                    body.id = 'deepread-explain-popup-body';
+                    body.style.padding = '8px 10px 10px 10px';
+                    body.style.whiteSpace = 'pre-wrap';
+
+                    popup.appendChild(header);
+                    popup.appendChild(body);
+                    document.body.appendChild(popup);
+                }
+                const titleEl = document.getElementById('deepread-explain-popup-title');
+                if (titleEl) titleEl.textContent = `解释：${displayName}`;
+                explanationDiv = document.getElementById('deepread-explain-popup-body');
+            } else {
+                if (!document.getElementById('deepread-container')) {
+                    createDeepReadPanel();
+                }
+
+                const panel = document.getElementById('deepread-container');
+                if (panel) {
+                    panel.classList.remove('deepread-hidden');
+                }
+
+                explanationDiv = document.getElementById('deepread-explanation-section-id');
+                if (!explanationDiv) {
+                    if (pageAnalyzed) {
+                        try{
+                            debugLog('[Explain] explanationDiv missing; render analysis results layout first');
+                            showAnalysisResults({
+                                summary: pageSummary,
+                                keyTerms: pageKeyTerms,
+                                keyParagraphs: pageKeyParagraphs
+                            });
+                        }catch(err){
+                            console.warn('DeepRead: explainConcept 渲染分析布局失败:', err);
+                        }
+                        explanationDiv = document.getElementById('deepread-explanation-section-id');
                     }
-                    explanationDiv = document.getElementById('deepread-explanation-section-id');
+                }
+                if (!explanationDiv) {
+                    console.error('未找到解释区域');
+                    return;
                 }
             }
-            if (!explanationDiv) {
-                console.error('未找到解释区域');
-                return;
+
+            if (explanationDiv) {
+                explanationDiv.innerHTML = `正在获取"${displayName}"的解释...`;
             }
-            
-            explanationDiv.innerHTML = `<div class="deepread-loading">正在获取"${displayName}"的解释...</div>`;
             
             // 检查缓存中是否已有对应概念的解释
             const existingConceptIndex = conceptHistory.findIndex(item => 
@@ -4444,8 +4577,12 @@ async function explainConcept(conceptName, element, options = {}) {
                 }
 
                 // 命中缓存：直接更新UI并返回（避免重复调用 LLM）
-                debugLog('explainConcept 命中缓存，调用 updateExplanationArea');
-                updateExplanationArea(conceptName, processedResponse, displayName, conceptKey);
+                if (usePopup && explanationDiv) {
+                    explanationDiv.textContent = String(processedResponse && processedResponse.explanation ? processedResponse.explanation : '');
+                } else {
+                    debugLog('explainConcept 命中缓存，调用 updateExplanationArea');
+                    updateExplanationArea(conceptName, processedResponse, displayName, conceptKey);
+                }
                 return;
             } else {
                 // 如果不存在，调用LLM API获取概念解释
@@ -4454,17 +4591,8 @@ async function explainConcept(conceptName, element, options = {}) {
                 // 如果调用失败，显示错误和重试按钮
                 if (!conceptInfo) {
                     console.error('获取概念解释失败:', conceptName);
-                    explanationDiv.innerHTML = `
-                        <div class="deepread-error">
-                            获取"${displayName}"的解释失败。请稍后再试。
-                            <button class="deepread-retry-btn" data-concept="${conceptName}" data-display="${displayName}">重试</button>
-                        </div>`;
-                    // 绑定重试按钮事件
-                    const retryBtn = explanationDiv.querySelector('.deepread-retry-btn');
-                    if (retryBtn) {
-                        retryBtn.addEventListener('click', function() {
-                            explainConcept(conceptName, null);
-                        });
+                    if (explanationDiv) {
+                        explanationDiv.textContent = `获取"${displayName}"的解释失败。请稍后再试。`;
                     }
                     return;
                 }
@@ -4478,8 +4606,12 @@ async function explainConcept(conceptName, element, options = {}) {
                 if (isFallbackResponse) {
                     console.warn(`概念"${displayName}"的解释是默认的回退响应，不会添加到缓存中`);
                     // 如果是默认的回退响应，不进行缓存
-                    debugLog('explainConcept 调用 updateExplanationArea');
-                    updateExplanationArea(conceptName, processedResponse, displayName, conceptKey);
+                    if (usePopup && explanationDiv) {
+                        explanationDiv.textContent = String(processedResponse && processedResponse.explanation ? processedResponse.explanation : '');
+                    } else {
+                        debugLog('explainConcept 调用 updateExplanationArea');
+                        updateExplanationArea(conceptName, processedResponse, displayName, conceptKey);
+                    }
                     return;
                 }
 
@@ -4518,8 +4650,12 @@ async function explainConcept(conceptName, element, options = {}) {
             }
             
             // 更新UI
-            debugLog('explainConcept 调用 updateExplanationArea');
-            updateExplanationArea(conceptName, processedResponse, displayName, conceptKey);
+            if (usePopup && explanationDiv) {
+                explanationDiv.textContent = String(processedResponse && processedResponse.explanation ? processedResponse.explanation : '');
+            } else {
+                debugLog('explainConcept 调用 updateExplanationArea');
+                updateExplanationArea(conceptName, processedResponse, displayName, conceptKey);
+            }
             
             // 高亮当前点击的概念
             document.querySelectorAll('.deepread-concept-active').forEach(el => {
