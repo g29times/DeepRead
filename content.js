@@ -2492,7 +2492,7 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
         
         // 尝试从存储中获取用户配置的MODEL和thinkingLevel
         let userModelId = MODEL_ID;
-        let userThinkingLevel = 'MINIMAL';
+        let userThinkingLevel = '';
         if (isExtensionEnvironment && chrome.storage) {
             try {
                 // 同步获取存储的MODEL和thinkingLevel
@@ -2505,7 +2505,7 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
                     debugLog(`使用用户配置的MODEL: ${userModelId}`);
                 }
                 if (result.deepread_thinking_level) {
-                    userThinkingLevel = result.deepread_thinking_level;
+                    userThinkingLevel = String(result.deepread_thinking_level || '').trim();
                     debugLog(`使用用户配置的thinkingLevel: ${userThinkingLevel}`);
                 }
             } catch (error) {
@@ -2517,7 +2517,7 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
             const storedModel = localStorage.getItem('deepread_model');
             const storedThinkingLevel = localStorage.getItem('deepread_thinking_level');
             if (storedModel) userModelId = storedModel;
-            if (storedThinkingLevel) userThinkingLevel = storedThinkingLevel;
+            if (storedThinkingLevel) userThinkingLevel = String(storedThinkingLevel || '').trim();
         }
 
         const API_URL = API_BASE_URL + `${userModelId}:generateContent?key=${API_KEY}`
@@ -2536,9 +2536,6 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
                 topP: 0.95,
                 topK: 64,
                 maxOutputTokens: 8192,
-                thinkingConfig: {
-                    thinkingLevel: userThinkingLevel, // MINIMAL, LOW, MEDIUM, HIGH 
-                },
             },
             tools: [
                 {
@@ -2550,29 +2547,48 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
             ],
         };
         debugLog(`${apiType} 发送请求到API \n ${API_URL}`);
+
+        if (userThinkingLevel) {
+            requestBody.generationConfig.thinkingConfig = {
+                thinkingLevel: userThinkingLevel, // MINIMAL, LOW, MEDIUM, HIGH
+            };
+        }
+
+        const shouldRetryWithoutThinking = (errorData) => {
+            try {
+                const msg = errorData && errorData.error && errorData.error.message ? String(errorData.error.message) : '';
+                return msg.includes('Thinking level is not supported');
+            } catch {
+                return false;
+            }
+        };
+
+        const doFetch = async () => {
+            // 创建AbortController来设置超时
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 300000); // 300秒超时
+            try {
+                const resp = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: {
+                        // "Authorization": "Bearer " + API_KEY, // openrouter
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody),
+                    signal: controller.signal // 使用AbortController的signal
+                });
+                clearTimeout(timeoutId);
+                return resp;
+            } catch (e) {
+                clearTimeout(timeoutId);
+                throw e;
+            }
+        };
         
-        // 创建AbortController来设置超时
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 300000); // 300秒超时
-        // 发送请求
         let response;
         try {
-            response = await fetch(API_URL, {
-                method: 'POST',
-                headers: {
-                    // "Authorization": "Bearer " + API_KEY, // openrouter
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(requestBody),
-                signal: controller.signal // 使用AbortController的signal
-            });
-            
-            // 请求完成后清除超时定时器
-            clearTimeout(timeoutId);
+            response = await doFetch();
         } catch (fetchError) {
-            // 清除超时定时器
-            clearTimeout(timeoutId);
-            
             // 如果是超时错误
             if (fetchError.name === 'AbortError') {
                 console.error(`${apiType} API请求超时（300秒）`);
@@ -2588,6 +2604,17 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
         if (!response.ok) {
             const errorData = await response.json();
             console.error(`${apiType} API请求失败：`, errorData);
+            if (requestBody && requestBody.generationConfig && requestBody.generationConfig.thinkingConfig && shouldRetryWithoutThinking(errorData)) {
+                try {
+                    delete requestBody.generationConfig.thinkingConfig;
+                    response = await doFetch();
+                } catch (e) {
+                    throw e;
+                }
+            }
+        }
+
+        if (!response.ok) {
             throw new Error(`API请求失败: ${response.status} ${response.statusText}`);
         }
         
@@ -2641,7 +2668,7 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
         
         // 尝试从存储中获取用户配置的MODEL和thinkingLevel
         let userModelId = MODEL_ID;
-        let userThinkingLevel = 'MINIMAL';
+        let userThinkingLevel = '';
         if (isExtensionEnvironment && chrome.storage) {
             try {
                 // 同步获取存储的MODEL和thinkingLevel
@@ -2654,7 +2681,7 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
                     debugLog(`使用用户配置的MODEL: ${userModelId}`);
                 }
                 if (result.deepread_thinking_level) {
-                    userThinkingLevel = result.deepread_thinking_level;
+                    userThinkingLevel = String(result.deepread_thinking_level || '').trim();
                     debugLog(`使用用户配置的thinkingLevel: ${userThinkingLevel}`);
                 }
             } catch (error) {
@@ -2666,7 +2693,7 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
             const storedModel = localStorage.getItem('deepread_model');
             const storedThinkingLevel = localStorage.getItem('deepread_thinking_level');
             if (storedModel) userModelId = storedModel;
-            if (storedThinkingLevel) userThinkingLevel = storedThinkingLevel;
+            if (storedThinkingLevel) userThinkingLevel = String(storedThinkingLevel || '').trim();
         }
         
         // 使用 streamGenerateContent API
@@ -2680,9 +2707,6 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
                 topP: 0.95,
                 topK: 64,
                 maxOutputTokens: 8192,
-                thinkingConfig: {
-                    thinkingLevel: userThinkingLevel,
-                },
             },
             tools: [
                 {
@@ -2694,29 +2718,46 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
             ],
         };
         debugLog(`${apiType} 发送流式请求到 API \n ${STREAM_API_URL}`);
+
+        if (userThinkingLevel) {
+            requestBody.generationConfig.thinkingConfig = {
+                thinkingLevel: userThinkingLevel,
+            };
+        }
+
+        const shouldRetryWithoutThinking = (errorData) => {
+            try {
+                const msg = errorData && errorData.error && errorData.error.message ? String(errorData.error.message) : '';
+                return msg.includes('Thinking level is not supported');
+            } catch {
+                return false;
+            }
+        };
+
+        const doFetchStream = async () => {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 300000); // 300秒超时
+            try {
+                const resp = await fetch(STREAM_API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody),
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                return resp;
+            } catch (e) {
+                clearTimeout(timeoutId);
+                throw e;
+            }
+        };
         
-        // 创建AbortController来设置超时
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 300000); // 300秒超时
-        
-        // 发送请求
         let response;
         try {
-            response = await fetch(STREAM_API_URL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(requestBody),
-                signal: controller.signal // 使用AbortController的signal
-            });
-            
-            // 请求完成后清除超时定时器
-            clearTimeout(timeoutId);
+            response = await doFetchStream();
         } catch (fetchError) {
-            // 清除超时定时器
-            clearTimeout(timeoutId);
-            
             // 如果是超时错误
             if (fetchError.name === 'AbortError') {
                 console.error(`${apiType} 流式API请求超时（300秒）`);
@@ -2734,6 +2775,18 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
         if (!response.ok) {
             const errorData = await response.json();
             console.error(`${apiType} 流式API请求失败：`, errorData);
+            if (requestBody && requestBody.generationConfig && requestBody.generationConfig.thinkingConfig && shouldRetryWithoutThinking(errorData)) {
+                try {
+                    delete requestBody.generationConfig.thinkingConfig;
+                    response = await doFetchStream();
+                } catch (e) {
+                    if (onError) onError(e);
+                    return;
+                }
+            }
+        }
+
+        if (!response.ok) {
             if (onError) onError(new Error(`API请求失败: ${response.status} ${response.statusText}`));
             return;
         }

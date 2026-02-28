@@ -106,6 +106,36 @@ function startUrlWatcher() {
   }
 }
 
+let __configChangedTimer = null;
+function bindConfigAutoRefresh() {
+  try {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== 'sync') return;
+      if (!changes) return;
+      const keys = Object.keys(changes);
+      const watched = new Set([
+        'deepread_api_key',
+        'deepread_model',
+        'deepread_thinking_level',
+        'deepread_feishu_webhook_url',
+      ]);
+      const hit = keys.some((k) => watched.has(k));
+      if (!hit) return;
+
+      if (__configChangedTimer) clearTimeout(__configChangedTimer);
+      __configChangedTimer = setTimeout(async () => {
+        try {
+          await refreshState();
+        } catch (e) {
+          // ignore
+        }
+      }, 180);
+    });
+  } catch (e) {
+    // ignore
+  }
+}
+
 async function insertSummaryToChat() {
   if (!lastSummary) {
     alert('当前没有可插入的全文解释。');
@@ -597,7 +627,7 @@ async function writeToClipboardWithFallback(text) {
   const s = String(text == null ? '' : text);
   try {
     await navigator.clipboard.writeText(s);
-    alert('已复制到剪贴板。');
+    // alert('已复制到剪贴板。');
     return;
   } catch (e) {
     // fallback
@@ -615,7 +645,7 @@ async function writeToClipboardWithFallback(text) {
     const ok = document.execCommand('copy');
     document.body.removeChild(ta);
     if (ok) {
-      alert('已复制到剪贴板。');
+      // alert('已复制到剪贴板。');
       return;
     }
   } catch (e) {
@@ -632,11 +662,12 @@ async function showTextInputDialog(title, message, presetValue = '') {
   overlay.style.top = '0';
   overlay.style.right = '0';
   overlay.style.bottom = '0';
-  overlay.style.background = 'rgba(0,0,0,0.25)';
+  overlay.style.background = 'rgba(0,0,0,0.28)';
   overlay.style.zIndex = '999999';
   overlay.style.display = 'flex';
   overlay.style.alignItems = 'center';
   overlay.style.justifyContent = 'center';
+  overlay.style.padding = '12px';
 
   const card = document.createElement('div');
   card.style.width = '92%';
@@ -713,10 +744,11 @@ async function showTextInputDialog(title, message, presetValue = '') {
   });
 }
 
-(async function main() {
+(async function init() {
   await loadFontSizeSetting();
   bindEvents();
   bindTabSyncEvents();
-  await hardRefresh();
   startUrlWatcher();
+  bindConfigAutoRefresh();
+  await hardRefresh();
 })();

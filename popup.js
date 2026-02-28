@@ -25,11 +25,24 @@ function sendMessageToContentScript(action) {
     });
 }
 
-const THINKING_LEVELS = ['MINIMAL', 'LOW', 'MEDIUM', 'HIGH'];
+const THINKING_LEVELS = ['OFF', 'MINIMAL', 'LOW', 'MEDIUM', 'HIGH'];
+const THINKING_VALUE_TO_LEVEL = {
+    MINIMAL: 1,
+    LOW: 2,
+    MEDIUM: 3,
+    HIGH: 4,
+};
+const THINKING_LEVEL_TO_VALUE = {
+    0: '',
+    1: 'MINIMAL',
+    2: 'LOW',
+    3: 'MEDIUM',
+    4: 'HIGH',
+};
 
 function setThinkingLabel(v) {
     const n = Number(v);
-    const idx = Number.isFinite(n) ? Math.max(0, Math.min(3, Math.round(n))) : 0;
+    const idx = Number.isFinite(n) ? Math.max(0, Math.min(4, Math.round(n))) : 0;
     const el = document.getElementById('dr-popup-thinking-label');
     if (el) el.textContent = THINKING_LEVELS[idx];
 }
@@ -45,7 +58,7 @@ async function loadSettingsToPopup() {
 
         const apiKey = res && res.deepread_api_key ? String(res.deepread_api_key) : '';
         const model = res && res.deepread_model ? String(res.deepread_model) : 'gemini-3-flash-preview';
-        const thinkingLevel = (res && typeof res.deepread_thinking_level !== 'undefined') ? Number(res.deepread_thinking_level) : 0;
+        const thinkingRaw = res && typeof res.deepread_thinking_level !== 'undefined' ? String(res.deepread_thinking_level || '').trim() : '';
         const feishu = res && res.deepread_feishu_webhook_url ? String(res.deepread_feishu_webhook_url) : '';
 
         const apiInput = document.getElementById('dr-popup-api-key');
@@ -72,8 +85,11 @@ async function loadSettingsToPopup() {
         }
 
         const thinking = document.getElementById('dr-popup-thinking');
-        if (thinking) thinking.value = String(Number.isFinite(thinkingLevel) ? thinkingLevel : 0);
-        setThinkingLabel(thinkingLevel);
+        if (thinking) {
+            const v = THINKING_VALUE_TO_LEVEL[thinkingRaw] || 0;
+            thinking.value = String(v);
+            setThinkingLabel(v);
+        }
 
         const feishuInput = document.getElementById('dr-popup-feishu');
         if (feishuInput) feishuInput.value = feishu;
@@ -90,11 +106,12 @@ async function saveSettingsFromPopup() {
     const feishu = String(document.getElementById('dr-popup-feishu')?.value || '').trim();
 
     const modelId = modelSel === 'custom' ? modelCustom : modelSel;
+    const thinkingValue = THINKING_LEVEL_TO_VALUE[Math.max(0, Math.min(4, Math.round(Number.isFinite(thinkingLevel) ? thinkingLevel : 0)))] || '';
 
     await chrome.storage.sync.set({
         deepread_api_key: apiKey,
         deepread_model: modelId,
-        deepread_thinking_level: Number.isFinite(thinkingLevel) ? thinkingLevel : 0,
+        deepread_thinking_level: thinkingValue,
         deepread_feishu_webhook_url: feishu,
     });
 }
