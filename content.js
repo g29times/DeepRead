@@ -1193,13 +1193,14 @@ if (isExtensionEnvironment) {
             (async () => {
                 try {
                     const message = String(request.message || '').trim();
-                    if (!message) {
+                    const images = Array.isArray(request.images) ? request.images : [];
+                    if (!message && (!images || images.length === 0)) {
                         sendResponse({ ok: false, error: 'empty message' });
                         return;
                     }
 
                     // 只更新 history，不渲染 DOM
-                    chatHistory.push({ role: 'user', message, rawMessage: message, messageId: generateUniqueId() });
+                    chatHistory.push({ role: 'user', message: message || '[图片]', rawMessage: message || '[图片]', messageId: generateUniqueId() });
                     if (CHAT_PERSIST_ENABLED) {
                         await saveTabChatHistory(chatHistory);
                     }
@@ -1209,7 +1210,7 @@ if (isExtensionEnvironment) {
                         try { pageContent = extractPageContent(); } catch (e) { /* no-op */ }
                     }
 
-                    const responseText = await chatWithAI(message, chatHistory, pageContent, []);
+                    const responseText = await chatWithAI(message || '请根据我发送的图片内容回答。', chatHistory, pageContent, images);
                     const response = processChatResponse(responseText);
 
                     chatHistory.push({ role: 'assistant', message: response, rawMessage: responseText, messageId: generateUniqueId() });
@@ -1220,6 +1221,87 @@ if (isExtensionEnvironment) {
                     sendResponse({ ok: true, chatHistory });
                 } catch (err) {
                     console.error('SidePanel chat_send failed:', err);
+                    sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
+                }
+            })();
+            return true;
+        }
+
+        if (request.action === 'deepread_sp_chat_retry') {
+            (async () => {
+                try {
+                    const messageId = String(request.messageId || '').trim();
+                    if (!messageId) {
+                        sendResponse({ ok: false, error: 'missing messageId' });
+                        return;
+                    }
+
+                    const idx = (chatHistory || []).findIndex((m) => String(m && m.messageId ? m.messageId : '') === messageId);
+                    if (idx < 0) {
+                        sendResponse({ ok: false, error: 'message not found' });
+                        return;
+                    }
+
+                    const target = chatHistory[idx];
+                    const role = target && target.role ? String(target.role) : '';
+
+                    // 确保有 pageContent
+                    if (!pageContent) {
+                        try { pageContent = extractPageContent(); } catch (e) { /* no-op */ }
+                    }
+
+                    // 找到用于生成回复的 user 消息 index
+                    let userIdx = -1;
+                    let assistantIdxToReplace = -1;
+                    if (role === 'user') {
+                        userIdx = idx;
+                        // 优先替换紧邻的 assistant
+                        const next = chatHistory[idx + 1];
+                        if (next && String(next.role || '') === 'assistant') {
+                            assistantIdxToReplace = idx + 1;
+                        }
+                    } else {
+                        assistantIdxToReplace = idx;
+                        // 向前找最近的 user
+                        for (let i = idx - 1; i >= 0; i--) {
+                            if (chatHistory[i] && String(chatHistory[i].role || '') === 'user') {
+                                userIdx = i;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (userIdx < 0) {
+                        sendResponse({ ok: false, error: 'no user message for retry' });
+                        return;
+                    }
+
+                    const userMsg = String(chatHistory[userIdx].rawMessage || chatHistory[userIdx].message || '').trim();
+                    if (!userMsg) {
+                        sendResponse({ ok: false, error: 'empty user message' });
+                        return;
+                    }
+
+                    // 用当前对话历史（包含该 user）来生成新回复
+                    const historyForLLM = (chatHistory || []).slice(0, userIdx + 1);
+                    const responseText = await chatWithAI(userMsg, historyForLLM, pageContent, []);
+                    const response = processChatResponse(responseText);
+
+                    const newAssistant = { role: 'assistant', message: response, rawMessage: responseText, messageId: generateUniqueId() };
+                    if (assistantIdxToReplace >= 0) {
+                        chatHistory[assistantIdxToReplace] = newAssistant;
+                    } else {
+                        // 没有可替换的 assistant（例如 user 是最后一条），则在 user 后插入
+                        chatHistory.splice(userIdx + 1, 0, newAssistant);
+                    }
+
+                    if (CHAT_PERSIST_ENABLED) {
+                        await saveTabChatHistory(chatHistory);
+                    }
+
+                    sendResponse({ ok: true, chatHistory });
+                } catch (err) {
+                    console.error('SidePanel chat_retry failed:', err);
                     sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
                 }
             })();
@@ -2773,8 +2855,19 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
         
         // 检查响应状态
         if (!response.ok) {
-            const errorData = await response.json();
-            console.error(`${apiType} 流式API请求失败：`, errorData);
+            let errorData = null;
+            let errorText = '';
+            try {
+                errorText = await response.text();
+                try {
+                    errorData = JSON.parse(errorText);
+                } catch {
+                    errorData = null;
+                }
+            } catch {
+                // ignore
+            }
+            console.error(`${apiType} 流式API请求失败：`, errorData || errorText);
             if (requestBody && requestBody.generationConfig && requestBody.generationConfig.thinkingConfig && shouldRetryWithoutThinking(errorData)) {
                 try {
                     delete requestBody.generationConfig.thinkingConfig;
@@ -2787,7 +2880,13 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
         }
 
         if (!response.ok) {
-            if (onError) onError(new Error(`API请求失败: ${response.status} ${response.statusText}`));
+            let errorText = '';
+            try {
+                errorText = await response.text();
+            } catch {
+                // ignore
+            }
+            if (onError) onError(new Error(errorText || `API请求失败: ${response.status} ${response.statusText}`));
             return;
         }
         

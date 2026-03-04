@@ -54,17 +54,29 @@
         <div class="drsp-section-title">对话区</div>
         <div class="drsp-chat-messages" id="drsp-messages"></div>
         <div class="drsp-chat-input">
+          <!-- <div class="drsp-chat-upload">
+            <button class="drsp-btn" id="drsp-upload-image">图片</button>
+            <button class="drsp-btn" id="drsp-upload-file">文件</button>
+            <input id="drsp-image-input" type="file" accept="image/*" multiple style="display:none;" />
+            <input id="drsp-file-input" type="file" multiple style="display:none;" />
+          </div> -->
+          <div class="drsp-chat-preview" id="drsp-upload-preview" style="display:none;"></div>
           <textarea id="drsp-input" rows="2" placeholder="输入你的问题... (Shift+Enter 发送)"></textarea>
           <div class="drsp-chat-actions">
-            <button class="drsp-btn" id="drsp-copy">导出</button>
+            <button class="drsp-btn" id="drsp-upload-image">图片</button>
+            <button class="drsp-btn" id="drsp-upload-file">文件</button>
+            <input id="drsp-image-input" type="file" accept="image/*" multiple style="display:none;" />
+            <input id="drsp-file-input" type="file" multiple style="display:none;" />
             <button class="drsp-btn" id="drsp-append">导入</button>
-            <button class="drsp-btn" id="drsp-clear">清空</button>
             <button class="drsp-btn drsp-primary" id="drsp-send">发送</button>
+            <button class="drsp-btn" id="drsp-copy">导出</button>
+            <button class="drsp-btn" id="drsp-clear">清空</button>
           </div>
         </div>
       </div>
     </div>
 
+    <script src="showdown.min.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

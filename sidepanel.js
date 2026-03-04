@@ -3,6 +3,9 @@ let lastConceptName = '';
 let lastConceptExplanation = '';
 let lastSummary = '';
 let lastSeenTabUrl = '';
+let __localChatHistory = [];
+let __selectedImages = [];
+let __selectedFiles = [];
 const DRSP_FONT_SIZE_KEY = 'deepread_sp_font_size_px';
 const DRSP_FONT_SIZE_OPTIONS = [12, 14, 16, 18];
 
@@ -193,6 +196,61 @@ function escapeHtml(s) {
     .replaceAll("'", '&#039;');
 }
 
+function extractHttpErrorMessage(input) {
+  const raw = (input == null) ? '' : String(input);
+  const s = raw.trim();
+  if (!s) return '';
+  try {
+    const parsed = JSON.parse(s);
+    if (Array.isArray(parsed) && parsed[0] && parsed[0].error && parsed[0].error.message) {
+      return String(parsed[0].error.message);
+    }
+    if (parsed && parsed.error && parsed.error.message) {
+      return String(parsed.error.message);
+    }
+  } catch (e) {
+    // ignore
+  }
+  return s;
+}
+
+function showErrorDialog(title, detail) {
+  const msg = extractHttpErrorMessage(detail);
+  const head = title ? String(title) : '请求失败';
+  const body = msg ? `\n\n${msg}` : '';
+  alert(`${head}${body}`);
+}
+
+let __drspShowdownConverter = null;
+function getShowdownConverter() {
+  try {
+    if (__drspShowdownConverter) return __drspShowdownConverter;
+    if (typeof showdown === 'undefined') return null;
+    __drspShowdownConverter = new showdown.Converter({
+      tables: true,
+      simplifiedAutoLink: true,
+      strikethrough: true,
+      tasklists: true,
+    });
+    return __drspShowdownConverter;
+  } catch (e) {
+    return null;
+  }
+}
+
+function renderMarkdownToHtml(mdText) {
+  const s = String(mdText || '');
+  const conv = getShowdownConverter();
+  if (conv) {
+    try {
+      return conv.makeHtml(s);
+    } catch (e) {
+      // ignore
+    }
+  }
+  return escapeHtml(s).replaceAll('\n', '<br/>');
+}
+
 function renderMeta(meta) {
   const el = qs('drsp-meta');
   if (!el) return;
@@ -218,11 +276,37 @@ function renderChat(history) {
 
     const content = document.createElement('div');
     content.className = 'drsp-msg-content';
-    content.textContent = raw;
+    if (m.role === 'assistant') {
+      content.innerHTML = renderMarkdownToHtml(raw);
+    } else {
+      content.textContent = raw;
+    }
     div.appendChild(content);
 
     const actions = document.createElement('div');
     actions.className = 'drsp-msg-actions';
+    // 加个“重试”按钮
+
+    if (messageId) {
+      const retryBtn = document.createElement('button');
+      retryBtn.className = 'drsp-msg-action';
+      retryBtn.textContent = '重试';
+      retryBtn.addEventListener('click', async () => {
+        try {
+          const resp = await sendToContent('deepread_sp_chat_retry', { messageId });
+          if (resp && resp.ok) {
+            __localChatHistory = resp.chatHistory || [];
+            renderChat(__localChatHistory);
+          } else {
+            showErrorDialog('重试失败', resp && resp.error ? resp.error : '');
+            await refreshState();
+          }
+        } catch (e) {
+          showErrorDialog('重试失败', e && e.message ? e.message : String(e));
+        }
+      });
+      actions.appendChild(retryBtn);
+    }
 
     const copyBtn = document.createElement('button');
     copyBtn.className = 'drsp-msg-action';
@@ -253,11 +337,119 @@ function renderChat(history) {
 
     container.appendChild(div);
   });
-  container.scrollTop = container.scrollHeight;
+  try {
+    container.scrollTop = container.scrollHeight;
+  } catch (e) {
+    // ignore
+  }
 }
 
-function renderParagraphs(targetId, paragraphs) {
-  const container = qs(targetId);
+function renderUploadPreview() {
+  const container = qs('drsp-upload-preview');
+  if (!container) return;
+
+  const hasAny = (__selectedImages && __selectedImages.length) || (__selectedFiles && __selectedFiles.length);
+  if (!hasAny) {
+    container.innerHTML = '';
+    container.style.display = 'none';
+    return;
+  }
+
+  container.style.display = 'flex';
+  container.innerHTML = '';
+
+  (__selectedImages || []).forEach((img) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'drsp-preview-image';
+
+    const el = document.createElement('img');
+    el.src = img.data;
+    wrap.appendChild(el);
+
+    const rm = document.createElement('button');
+    rm.className = 'drsp-preview-remove';
+    rm.textContent = '×';
+    rm.addEventListener('click', (e) => {
+      e.stopPropagation();
+      __selectedImages = (__selectedImages || []).filter((x) => x.id !== img.id);
+      renderUploadPreview();
+    });
+    wrap.appendChild(rm);
+
+    container.appendChild(wrap);
+  });
+
+  (__selectedFiles || []).forEach((f) => {
+    const chip = document.createElement('div');
+    chip.className = 'drsp-preview-file';
+    chip.title = f.name;
+    chip.textContent = f.name;
+
+    const rm = document.createElement('button');
+    rm.className = 'drsp-preview-remove';
+    rm.textContent = '×';
+    rm.addEventListener('click', (e) => {
+      e.stopPropagation();
+      __selectedFiles = (__selectedFiles || []).filter((x) => x.id !== f.id);
+      renderUploadPreview();
+    });
+    chip.appendChild(rm);
+
+    container.appendChild(chip);
+  });
+}
+
+function resetUploads() {
+  __selectedImages = [];
+  __selectedFiles = [];
+  renderUploadPreview();
+}
+
+function addImagesFromInput(files) {
+  if (!files || !files.length) return;
+  Array.from(files).forEach((file) => {
+    if (!file || !file.type || !String(file.type).startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const id = `spimg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      __selectedImages.push({ id, data: String(e && e.target ? e.target.result : ''), name: file.name || '' });
+      renderUploadPreview();
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function addFilesFromInput(files) {
+  if (!files || !files.length) return;
+  Array.from(files).forEach((file) => {
+    if (!file) return;
+    const id = `spfile_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    __selectedFiles.push({ id, name: file.name || 'file', file });
+  });
+  renderUploadPreview();
+}
+
+async function readSelectedFilesAsText() {
+  const out = [];
+  for (const it of (__selectedFiles || [])) {
+    try {
+      const file = it.file;
+      if (!file) continue;
+      if (typeof file.size === 'number' && file.size > 200 * 1024) {
+        out.push({ name: it.name, text: '[文件过大，已跳过]' });
+        continue;
+      }
+      const text = await file.text();
+      out.push({ name: it.name, text: String(text || '') });
+    } catch (e) {
+      out.push({ name: it.name, text: '[读取失败]' });
+    }
+  }
+  return out;
+}
+
+function renderParagraphs(containerId, paragraphs) {
+  const container = qs(containerId);
   if (!container) return;
   container.innerHTML = '';
 
@@ -449,7 +641,8 @@ async function refreshState() {
   const resp = await sendToContent('deepread_sp_get_state');
   if (resp && resp.ok) {
     renderMeta(resp.pageMeta);
-    renderChat(resp.chatHistory || []);
+    __localChatHistory = resp.chatHistory || [];
+    renderChat(__localChatHistory);
     if (resp.analysisResult) {
       renderAnalysis(resp.analysisResult);
     } else {
@@ -510,19 +703,57 @@ async function explainConcept(conceptName) {
   }
 }
 
+async function sendChatMessage(text, opts = {}) {
+  const hasUploads = (__selectedImages && __selectedImages.length) || (__selectedFiles && __selectedFiles.length);
+  const allowUploads = !opts || !opts.disableUploads;
+  const trimmed = String(text || '').trim();
+  if (!trimmed && !(allowUploads && hasUploads)) return;
+
+  const pendingId = `sp_pending_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const uploadHintParts = [];
+  if (allowUploads && __selectedImages && __selectedImages.length) uploadHintParts.push(`${__selectedImages.length}张图片`);
+  if (allowUploads && __selectedFiles && __selectedFiles.length) uploadHintParts.push(`${__selectedFiles.length}个文件`);
+  const uploadHint = uploadHintParts.length ? `（附带${uploadHintParts.join('，')}）` : '';
+  const optimisticText = `${trimmed}${uploadHint}`.trim();
+
+  __localChatHistory = Array.isArray(__localChatHistory) ? __localChatHistory.slice() : [];
+  __localChatHistory.push({ role: 'user', rawMessage: optimisticText, message: optimisticText, messageId: pendingId });
+  renderChat(__localChatHistory);
+
+  let images = [];
+  let composed = trimmed;
+  if (allowUploads) {
+    images = (__selectedImages || []).map((x) => ({ id: x.id, data: x.data }));
+    const fileTexts = await readSelectedFilesAsText();
+    if (fileTexts && fileTexts.length) {
+      const blocks = fileTexts.map((f) => `---\n文件：${f.name}\n\n${f.text}`);
+      composed = `${trimmed}\n\n[附件文本]\n${blocks.join('\n\n')}`.trim();
+    }
+    resetUploads();
+  }
+
+  let resp;
+  try {
+    resp = await sendToContent('deepread_sp_chat_send', { message: composed, images });
+  } catch (e) {
+    showErrorDialog('请求失败', e && e.message ? e.message : String(e));
+    throw e;
+  }
+
+  if (resp && resp.ok) {
+    __localChatHistory = resp.chatHistory || [];
+    renderChat(__localChatHistory);
+  } else {
+    showErrorDialog('请求失败', resp && resp.error ? resp.error : '');
+    await refreshState();
+  }
+}
+
 async function sendChat() {
   const input = qs('drsp-input');
   const text = input ? input.value.trim() : '';
-  if (!text) return;
-
   if (input) input.value = '';
-
-  const resp = await sendToContent('deepread_sp_chat_send', { message: text });
-  if (resp && resp.ok) {
-    renderChat(resp.chatHistory || []);
-  } else {
-    await refreshState();
-  }
+  await sendChatMessage(text);
 }
 
 async function copyImportableChat() {
@@ -572,6 +803,8 @@ async function appendImportableChat() {
 }
 
 async function clearChat() {
+  const ok = confirm('确认清空当前对话？此操作不可撤销。');
+  if (!ok) return;
   const resp = await sendToContent('deepread_sp_clear_chat');
   if (resp && resp.ok) {
     await refreshState();
@@ -591,6 +824,26 @@ function bindEvents() {
   qs('drsp-refresh').addEventListener('click', hardRefresh);
   const cfg = qs('drsp-config');
   if (cfg) cfg.addEventListener('click', openConfigWindow);
+
+  const imgBtn = qs('drsp-upload-image');
+  const fileBtn = qs('drsp-upload-file');
+  const imgInput = qs('drsp-image-input');
+  const fileInput = qs('drsp-file-input');
+  if (imgBtn && imgInput) {
+    imgBtn.addEventListener('click', () => imgInput.click());
+    imgInput.addEventListener('change', (e) => {
+      try { addImagesFromInput(e && e.target ? e.target.files : null); } catch (err) { /* ignore */ }
+      try { e.target.value = ''; } catch (err) { /* ignore */ }
+    });
+  }
+  if (fileBtn && fileInput) {
+    fileBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => {
+      try { addFilesFromInput(e && e.target ? e.target.files : null); } catch (err) { /* ignore */ }
+      try { e.target.value = ''; } catch (err) { /* ignore */ }
+    });
+  }
+
   qs('drsp-send').addEventListener('click', sendChat);
   qs('drsp-clear').addEventListener('click', clearChat);
   qs('drsp-copy').addEventListener('click', copyImportableChat);

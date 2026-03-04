@@ -233,6 +233,71 @@ body {
   background: #fff;
 }
 
+.drsp-chat-upload {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.drsp-chat-preview {
+  display: flex;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding: 4px;
+  border: 1px solid #f3f4f6;
+  border-radius: 10px;
+  background: #fff;
+  margin-bottom: 6px;
+}
+
+.drsp-preview-image {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.drsp-preview-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.drsp-preview-file {
+  position: relative;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  padding: 6px 26px 6px 10px;
+  font-size: var(--drsp-font-xs);
+  color: #111827;
+  background: #fff;
+  white-space: nowrap;
+  flex-shrink: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.drsp-preview-remove {
+  position: absolute;
+  right: 6px;
+  top: 4px;
+  width: 18px;
+  height: 18px;
+  line-height: 18px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  padding: 0;
+}
+
 .drsp-msg {
   border: 1px solid #e5e7eb;
   border-radius: 10px;
