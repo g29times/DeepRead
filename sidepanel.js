@@ -756,12 +756,12 @@ async function sendChat() {
   await sendChatMessage(text);
 }
 
-async function copyImportableChat() {
+async function exportImportableChat() {
   const resp = await sendToContent('deepread_sp_get_state');
   if (!resp || !resp.ok) return;
   const chatHistory = resp.chatHistory || [];
   if (!chatHistory.length) {
-    alert('当前没有可复制的对话内容。');
+    showErrorDialog('导出失败', '当前没有可导出的对话内容。');
     return;
   }
 
@@ -780,8 +780,34 @@ async function copyImportableChat() {
     })),
   };
 
-  const jsonText = JSON.stringify(exportData);
-  await writeToClipboardWithFallback(jsonText);
+  const jsonText = JSON.stringify(exportData, null, 2);
+  const ts = new Date();
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const stamp = `${ts.getFullYear()}${pad2(ts.getMonth() + 1)}${pad2(ts.getDate())}_${pad2(ts.getHours())}${pad2(ts.getMinutes())}${pad2(ts.getSeconds())}`;
+  const host = (() => {
+    try {
+      const u = exportData && exportData.source && exportData.source.url ? String(exportData.source.url) : '';
+      if (!u) return '';
+      return new URL(u).hostname.replaceAll('.', '_');
+    } catch {
+      return '';
+    }
+  })();
+  const filename = `deepread_chat_${host ? host + '_' : ''}${stamp}.json`;
+
+  const blob = new Blob([jsonText], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } finally {
+    try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+  }
 }
 
 async function appendImportableChat() {
@@ -819,9 +845,16 @@ function bindEvents() {
       scheduleSaveFontSize(px);
     });
   }
-  qs('drsp-analyze').addEventListener('click', analyzeFull);
-  qs('drsp-manual-analyze').addEventListener('click', openManualAnalyzeModal);
-  qs('drsp-refresh').addEventListener('click', hardRefresh);
+
+  const analyzeBtn = qs('drsp-analyze');
+  if (analyzeBtn) analyzeBtn.addEventListener('click', analyzeFull);
+
+  const manualAnalyzeBtn = qs('drsp-manual-analyze');
+  if (manualAnalyzeBtn) manualAnalyzeBtn.addEventListener('click', openManualAnalyzeModal);
+
+  const refreshBtn = qs('drsp-refresh');
+  if (refreshBtn) refreshBtn.addEventListener('click', hardRefresh);
+
   const cfg = qs('drsp-config');
   if (cfg) cfg.addEventListener('click', openConfigWindow);
 
@@ -844,12 +877,71 @@ function bindEvents() {
     });
   }
 
-  qs('drsp-send').addEventListener('click', sendChat);
-  qs('drsp-clear').addEventListener('click', clearChat);
-  qs('drsp-copy').addEventListener('click', copyImportableChat);
-  qs('drsp-append').addEventListener('click', appendImportableChat);
-  qs('drsp-insert-summary').addEventListener('click', insertSummaryToChat);
-  qs('drsp-insert-concept').addEventListener('click', insertConceptToChat);
+  const sendBtn = qs('drsp-send');
+  if (sendBtn) {
+    sendBtn.addEventListener('click', async () => {
+      try {
+        await sendChat();
+      } catch (e) {
+        showErrorDialog('发送失败', e && e.message ? e.message : String(e));
+      }
+    });
+  }
+
+  const clearBtn = qs('drsp-clear');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', async () => {
+      try {
+        await clearChat();
+      } catch (e) {
+        showErrorDialog('清空失败', e && e.message ? e.message : String(e));
+      }
+    });
+  }
+
+  const copyBtn = qs('drsp-copy');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await exportImportableChat();
+      } catch (e) {
+        showErrorDialog('导出失败', e && e.message ? e.message : String(e));
+      }
+    });
+  }
+
+  const appendBtn = qs('drsp-append');
+  if (appendBtn) {
+    appendBtn.addEventListener('click', async () => {
+      try {
+        await appendImportableChat();
+      } catch (e) {
+        showErrorDialog('导入失败', e && e.message ? e.message : String(e));
+      }
+    });
+  }
+
+  const insertSummaryBtn = qs('drsp-insert-summary');
+  if (insertSummaryBtn) {
+    insertSummaryBtn.addEventListener('click', async () => {
+      try {
+        await insertSummaryToChat();
+      } catch (e) {
+        showErrorDialog('插入失败', e && e.message ? e.message : String(e));
+      }
+    });
+  }
+
+  const insertConceptBtn = qs('drsp-insert-concept');
+  if (insertConceptBtn) {
+    insertConceptBtn.addEventListener('click', async () => {
+      try {
+        await insertConceptToChat();
+      } catch (e) {
+        showErrorDialog('插入失败', e && e.message ? e.message : String(e));
+      }
+    });
+  }
 
   const input = qs('drsp-input');
   if (input) {
