@@ -419,6 +419,21 @@ function addImagesFromInput(files) {
   });
 }
 
+function addImagesFromBlobs(blobs) {
+  if (!blobs || !blobs.length) return;
+  blobs.forEach((blob) => {
+    if (!blob || !blob.type || !String(blob.type).startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const id = `spimg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      const name = blob.name || 'pasted-image';
+      __selectedImages.push({ id, data: String(e && e.target ? e.target.result : ''), name });
+      renderUploadPreview();
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
 function addFilesFromInput(files) {
   if (!files || !files.length) return;
   Array.from(files).forEach((file) => {
@@ -949,6 +964,23 @@ function bindEvents() {
       if (e.key === 'Enter' && e.shiftKey) {
         e.preventDefault();
         sendChat();
+      }
+    });
+
+    input.addEventListener('paste', (e) => {
+      try {
+        const cd = e.clipboardData;
+        const items = cd && cd.items ? Array.from(cd.items) : [];
+        const imageFiles = items
+          .filter((it) => it && it.kind === 'file' && it.type && it.type.startsWith('image/'))
+          .map((it) => (typeof it.getAsFile === 'function' ? it.getAsFile() : null))
+          .filter(Boolean);
+        if (imageFiles.length) {
+          e.preventDefault();
+          addImagesFromBlobs(imageFiles);
+        }
+      } catch (err) {
+        // ignore
       }
     });
   }
