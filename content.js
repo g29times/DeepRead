@@ -1194,13 +1194,23 @@ if (isExtensionEnvironment) {
                 try {
                     const message = String(request.message || '').trim();
                     const images = Array.isArray(request.images) ? request.images : [];
-                    if (!message && (!images || images.length === 0)) {
+                    const attachments = Array.isArray(request.attachments) ? request.attachments : [];
+                    if (!message && (!images || images.length === 0) && (!attachments || attachments.length === 0)) {
                         sendResponse({ ok: false, error: 'empty message' });
                         return;
                     }
 
                     // 只更新 history，不渲染 DOM
-                    chatHistory.push({ role: 'user', message: message || '[图片]', rawMessage: message || '[图片]', messageId: generateUniqueId() });
+                    const hasImages = images && images.length > 0;
+                    const hasAtts = attachments && attachments.length > 0;
+                    const placeholder = hasImages && hasAtts
+                        ? '[图片+附件]'
+                        : hasImages
+                            ? '[图片]'
+                            : hasAtts
+                                ? '[附件]'
+                                : '';
+                    chatHistory.push({ role: 'user', message: message || placeholder, rawMessage: message || placeholder, messageId: generateUniqueId() });
                     if (CHAT_PERSIST_ENABLED) {
                         await saveTabChatHistory(chatHistory);
                     }
@@ -1210,7 +1220,13 @@ if (isExtensionEnvironment) {
                         try { pageContent = extractPageContent(); } catch (e) { /* no-op */ }
                     }
 
-                    const responseText = await chatWithAI(message || '请根据我发送的图片内容回答。', chatHistory, pageContent, images);
+                    const fallbackPrompt = (hasImages && hasAtts)
+                        ? '请结合我发送的图片和附件内容回答。'
+                        : hasImages
+                            ? '请结合我发送的图片内容回答。'
+                            : '请结合我发送的附件内容回答。';
+
+                    const responseText = await chatWithAI(message || fallbackPrompt, chatHistory, pageContent, images, attachments);
                     const response = processChatResponse(responseText);
 
                     chatHistory.push({ role: 'assistant', message: response, rawMessage: responseText, messageId: generateUniqueId() });
@@ -5460,7 +5476,7 @@ async function sendChatMessage() {
  * @param pageContent 页面内容摘要
  * @returns 聊天回答
  */
-async function chatWithAI(userMessage, chatHistory = [], pageContent = '', images = []) {
+async function chatWithAI(userMessage, chatHistory = [], pageContent = '', images = [], attachments = []) {
     debugLog(`images: ${images && images.length > 0 ? images.length + '张图片' : '无图片'}`);
     debugLog('开始获取聊天回答，用户消息：' + userMessage);
     debugLog('聊天历史长度：' + chatHistory.length);
@@ -5546,7 +5562,17 @@ async function chatWithAI(userMessage, chatHistory = [], pageContent = '', image
             });
         });
     }
-    // 无论有无图片，都添加文本消息
+    // 文件附件作为附加文本 part 发送给模型
+    if (attachments && attachments.length > 0) {
+        attachments.forEach(att => {
+            const name = att && att.name ? String(att.name) : '文件';
+            const text = att && att.text ? String(att.text) : '';
+            if (text) {
+                userParts.push({ text: `附件：${name}\n\n${text}` });
+            }
+        });
+    }
+    // 无论有无图片/附件，都添加文本消息
     userParts.push({ text: userMessage });
 
     // 5. 将新的用户消息（可能包含图片）替换掉历史记录中的最后一条纯文本消息

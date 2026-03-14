@@ -29,29 +29,40 @@
 
       <!-- <div class="drsp-meta" id="drsp-meta"></div> -->
 
+      <!-- 解释区 -->
       <div class="drsp-section" id="drsp-analysis">
         <div class="drsp-analysis-header">
           <div class="drsp-section-title">解释区</div>
           <div class="drsp-analysis-actions">
+            <button class="drsp-btn" id="drsp-toggle-analysis">折叠</button>
             <button class="drsp-btn" id="drsp-insert-summary">插入全文解释</button>
             <button class="drsp-btn" id="drsp-insert-concept">插入概念解释</button>
           </div>
         </div>
-        <div class="drsp-analysis-summary" id="drsp-summary"></div>
-        <div class="drsp-subtitle">相关概念</div>
-        <div class="drsp-chips" id="drsp-keyterms"></div>
-        <div class="drsp-subtitle">关键段落</div>
-        <div class="drsp-paragraphs" id="drsp-keyparagraphs"></div>
+        <div class="drsp-section-body" id="drsp-analysis-body">
+          <div class="drsp-analysis-summary" id="drsp-summary"></div>
+          <div class="drsp-subtitle">相关概念</div>
+          <div class="drsp-chips" id="drsp-keyterms"></div>
+          <div class="drsp-subtitle">关键段落</div>
+          <div class="drsp-paragraphs" id="drsp-keyparagraphs"></div>
 
-        <div class="drsp-subtitle">概念解释</div>
-        <div class="drsp-concept-title" id="drsp-concept-title"></div>
-        <div class="drsp-concept" id="drsp-concept"></div>
-        <div class="drsp-subtitle">相关段落</div>
-        <div class="drsp-paragraphs" id="drsp-relatedparagraphs"></div>
+          <div class="drsp-subtitle">概念解释</div>
+          <div class="drsp-concept-title" id="drsp-concept-title"></div>
+          <div class="drsp-concept" id="drsp-concept"></div>
+          <div class="drsp-subtitle">相关段落</div>
+          <div class="drsp-paragraphs" id="drsp-relatedparagraphs"></div>
+        </div>
       </div>
-
+      <!-- 对话区 -->
       <div class="drsp-section drsp-chat" id="drsp-chat">
-        <div class="drsp-section-title">对话区</div>
+        <!-- <div class="drsp-section-title">对话区</div> -->
+        <div class="drsp-chat-search">
+          <input id="drsp-chat-search-input" type="text" placeholder="搜索对话" />
+          <div class="drsp-chat-search-actions">
+            <button class="drsp-btn" id="drsp-chat-search-prev" title="上一条">↑</button>
+            <button class="drsp-btn" id="drsp-chat-search-next" title="下一条">↓</button>
+          </div>
+        </div>
         <div class="drsp-chat-messages" id="drsp-messages"></div>
         <div class="drsp-chat-input">
           <!-- <div class="drsp-chat-upload">

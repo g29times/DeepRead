@@ -6,11 +6,34 @@ let lastSeenTabUrl = '';
 let __localChatHistory = [];
 let __selectedImages = [];
 let __selectedFiles = [];
+let __analysisCollapsed = false;
+let __chatSearchQuery = '';
+let __chatSearchHits = [];
+let __chatSearchIndex = -1;
+let __chatSearchMarks = [];
 const DRSP_FONT_SIZE_KEY = 'deepread_sp_font_size_px';
 const DRSP_FONT_SIZE_OPTIONS = [12, 14, 16, 18];
 
 function qs(id) {
   return document.getElementById(id);
+}
+
+function setSectionCollapsed(sectionBodyId, collapsed) {
+  const body = qs(sectionBodyId);
+  if (!body) return;
+  body.style.display = collapsed ? 'none' : '';
+}
+
+function updateToggleButton(btnId, collapsed) {
+  const btn = qs(btnId);
+  if (!btn) return;
+  btn.textContent = collapsed ? '展开' : '折叠';
+}
+
+function toggleAnalysis() {
+  __analysisCollapsed = !__analysisCollapsed;
+  setSectionCollapsed('drsp-analysis-body', __analysisCollapsed);
+  updateToggleButton('drsp-toggle-analysis', __analysisCollapsed);
 }
 
 function normalizeFontSizePx(px) {
@@ -342,6 +365,131 @@ function renderChat(history) {
   } catch (e) {
     // ignore
   }
+
+  applyChatSearchHighlight();
+}
+
+function normalizeSearchText(s) {
+  return String(s || '').toLowerCase();
+}
+
+function getChatMessageElements() {
+  const container = qs('drsp-messages');
+  if (!container) return [];
+  return Array.from(container.querySelectorAll('.drsp-msg'));
+}
+
+function clearChatSearchMarks() {
+  (__chatSearchMarks || []).forEach((mark) => {
+    try {
+      const parent = mark.parentNode;
+      if (!parent) return;
+      parent.replaceChild(document.createTextNode(mark.textContent || ''), mark);
+      parent.normalize();
+    } catch (e) {
+      // ignore
+    }
+  });
+  __chatSearchMarks = [];
+}
+
+function applyChatSearchHighlight() {
+  const q = normalizeSearchText(__chatSearchQuery);
+  const els = getChatMessageElements();
+  clearChatSearchMarks();
+
+  const marks = [];
+  els.forEach((el) => {
+    el.classList.remove('drsp-msg-search-hit', 'drsp-msg-search-active');
+    if (!q) return;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    const textNodes = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (node && node.nodeValue && node.nodeValue.trim()) {
+        textNodes.push(node);
+      }
+    }
+    let hasHit = false;
+    textNodes.forEach((node) => {
+      const original = node.nodeValue;
+      const lower = normalizeSearchText(original);
+      let idx = lower.indexOf(q);
+      if (idx === -1) return;
+      hasHit = true;
+      const frag = document.createDocumentFragment();
+      let lastIndex = 0;
+      while (idx !== -1) {
+        if (idx > lastIndex) {
+          frag.appendChild(document.createTextNode(original.slice(lastIndex, idx)));
+        }
+        const span = document.createElement('span');
+        span.className = 'drsp-search-mark';
+        span.textContent = original.slice(idx, idx + q.length);
+        frag.appendChild(span);
+        marks.push(span);
+        lastIndex = idx + q.length;
+        idx = lower.indexOf(q, lastIndex);
+      }
+      if (lastIndex < original.length) {
+        frag.appendChild(document.createTextNode(original.slice(lastIndex)));
+      }
+      node.parentNode.replaceChild(frag, node);
+    });
+    if (hasHit) {
+      el.classList.add('drsp-msg-search-hit');
+    }
+  });
+
+  __chatSearchMarks = marks;
+  __chatSearchHits = marks;
+  if (!marks.length) {
+    __chatSearchIndex = -1;
+  } else if (__chatSearchIndex < 0 || __chatSearchIndex >= marks.length) {
+    __chatSearchIndex = 0;
+  }
+  updateChatSearchActive();
+  updateChatSearchButtons();
+}
+
+function updateChatSearchActive() {
+  (__chatSearchHits || []).forEach((el, idx) => {
+    const parentMsg = el.closest('.drsp-msg');
+    if (idx === __chatSearchIndex) {
+      el.classList.add('drsp-search-mark-active');
+      if (parentMsg) parentMsg.classList.add('drsp-msg-search-active');
+      try {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (e) {
+        // ignore
+      }
+    } else {
+      el.classList.remove('drsp-search-mark-active');
+      if (parentMsg) parentMsg.classList.remove('drsp-msg-search-active');
+    }
+  });
+}
+
+function updateChatSearchButtons() {
+  const prevBtn = qs('drsp-chat-search-prev');
+  const nextBtn = qs('drsp-chat-search-next');
+  const hasHits = __chatSearchHits && __chatSearchHits.length > 0;
+  const disabled = !hasHits;
+  if (prevBtn) prevBtn.disabled = disabled;
+  if (nextBtn) nextBtn.disabled = disabled;
+}
+
+function performChatSearch(query) {
+  __chatSearchQuery = String(query || '');
+  applyChatSearchHighlight();
+}
+
+function gotoNextSearchHit(delta) {
+  if (!__chatSearchHits || !__chatSearchHits.length) return;
+  const len = __chatSearchHits.length;
+  __chatSearchIndex = (__chatSearchIndex + delta + len) % len;
+  updateChatSearchActive();
+  updateChatSearchButtons();
 }
 
 function renderUploadPreview() {
@@ -450,8 +598,10 @@ async function readSelectedFilesAsText() {
     try {
       const file = it.file;
       if (!file) continue;
-      if (typeof file.size === 'number' && file.size > 200 * 1024) {
-        out.push({ name: it.name, text: '[文件过大，已跳过]' });
+      const sizeLimit = 20 * 1024 * 1024; // 20MB
+      if (typeof file.size === 'number' && file.size > sizeLimit) {
+        const mb = (file.size / (1024 * 1024)).toFixed(2);
+        out.push({ name: it.name, text: `[文件大小 ${mb}MB 过大（上限20MB），已跳过]` });
         continue;
       }
       const text = await file.text();
@@ -727,7 +877,10 @@ async function sendChatMessage(text, opts = {}) {
   const pendingId = `sp_pending_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   const uploadHintParts = [];
   if (allowUploads && __selectedImages && __selectedImages.length) uploadHintParts.push(`${__selectedImages.length}张图片`);
-  if (allowUploads && __selectedFiles && __selectedFiles.length) uploadHintParts.push(`${__selectedFiles.length}个文件`);
+  if (allowUploads && __selectedFiles && __selectedFiles.length) {
+    const names = __selectedFiles.map((f) => f.name || '文件');
+    uploadHintParts.push(`${__selectedFiles.length}个文件：${names.join('，')}`);
+  }
   const uploadHint = uploadHintParts.length ? `（附带${uploadHintParts.join('，')}）` : '';
   const optimisticText = `${trimmed}${uploadHint}`.trim();
 
@@ -737,19 +890,22 @@ async function sendChatMessage(text, opts = {}) {
 
   let images = [];
   let composed = trimmed;
+  let attachments = [];
   if (allowUploads) {
     images = (__selectedImages || []).map((x) => ({ id: x.id, data: x.data }));
+    // 不再将文件内容拼接到消息，仅提示文件名，将内容通过 attachments 传给后台
     const fileTexts = await readSelectedFilesAsText();
-    if (fileTexts && fileTexts.length) {
-      const blocks = fileTexts.map((f) => `---\n文件：${f.name}\n\n${f.text}`);
-      composed = `${trimmed}\n\n[附件文本]\n${blocks.join('\n\n')}`.trim();
+    attachments = fileTexts || [];
+    if (attachments && attachments.length) {
+      const names = attachments.map((f) => f.name || '文件');
+      if (!composed) composed = `[附件] ${names.join('，')}`;
     }
     resetUploads();
   }
 
   let resp;
   try {
-    resp = await sendToContent('deepread_sp_chat_send', { message: composed, images });
+    resp = await sendToContent('deepread_sp_chat_send', { message: composed, images, attachments });
   } catch (e) {
     showErrorDialog('请求失败', e && e.message ? e.message : String(e));
     throw e;
@@ -873,6 +1029,13 @@ function bindEvents() {
   const cfg = qs('drsp-config');
   if (cfg) cfg.addEventListener('click', openConfigWindow);
 
+  const toggleAnalysisBtn = qs('drsp-toggle-analysis');
+  if (toggleAnalysisBtn) {
+    toggleAnalysisBtn.addEventListener('click', toggleAnalysis);
+    updateToggleButton('drsp-toggle-analysis', __analysisCollapsed);
+    setSectionCollapsed('drsp-analysis-body', __analysisCollapsed);
+  }
+
   const imgBtn = qs('drsp-upload-image');
   const fileBtn = qs('drsp-upload-file');
   const imgInput = qs('drsp-image-input');
@@ -984,6 +1147,22 @@ function bindEvents() {
       }
     });
   }
+
+  const chatSearchInput = qs('drsp-chat-search-input');
+  if (chatSearchInput) {
+    chatSearchInput.addEventListener('input', (e) => {
+      performChatSearch(e && e.target ? e.target.value : '');
+    });
+  }
+  const chatSearchPrev = qs('drsp-chat-search-prev');
+  if (chatSearchPrev) {
+    chatSearchPrev.addEventListener('click', () => gotoNextSearchHit(-1));
+  }
+  const chatSearchNext = qs('drsp-chat-search-next');
+  if (chatSearchNext) {
+    chatSearchNext.addEventListener('click', () => gotoNextSearchHit(1));
+  }
+  updateChatSearchButtons();
 }
 
 async function insertConceptToChat() {

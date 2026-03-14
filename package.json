@@ -1,0 +1,11 @@
+{
+  "name": "deepread-dev-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "gemini:test": "node scripts/gemini-file-cache-stream-test.mjs"
+  },
+  "dependencies": {
+    "@google/genai": "^0.9.0"
+  }
+}
