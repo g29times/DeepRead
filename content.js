@@ -1210,7 +1210,14 @@ if (isExtensionEnvironment) {
                             : hasAtts
                                 ? '[附件]'
                                 : '';
-                    chatHistory.push({ role: 'user', message: message || placeholder, rawMessage: message || placeholder, messageId: generateUniqueId() });
+                    chatHistory.push({
+                        role: 'user',
+                        message: message || placeholder,
+                        rawMessage: message || placeholder,
+                        messageId: generateUniqueId(),
+                        images,
+                        attachments
+                    });
                     if (CHAT_PERSIST_ENABLED) {
                         await saveTabChatHistory(chatHistory);
                     }

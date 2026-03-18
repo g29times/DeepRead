@@ -306,6 +306,44 @@ function renderChat(history) {
     }
     div.appendChild(content);
 
+    const hasImages = m && Array.isArray(m.images) && m.images.length;
+    const hasFiles = m && Array.isArray(m.attachments) && m.attachments.length;
+    if (hasImages || hasFiles) {
+      const attWrap = document.createElement('div');
+      attWrap.className = 'drsp-msg-attachments';
+
+      if (hasImages) {
+        const imgs = document.createElement('div');
+        imgs.className = 'drsp-msg-images';
+        m.images.forEach((img) => {
+          if (!img || !img.data) return;
+          const item = document.createElement('div');
+          item.className = 'drsp-msg-image-item';
+          const el = document.createElement('img');
+          el.src = img.data;
+          el.alt = img.name || 'image';
+          item.appendChild(el);
+          imgs.appendChild(item);
+        });
+        attWrap.appendChild(imgs);
+      }
+
+      if (hasFiles) {
+        const files = document.createElement('div');
+        files.className = 'drsp-msg-files';
+        m.attachments.forEach((f) => {
+          if (!f || !f.name) return;
+          const chip = document.createElement('div');
+          chip.className = 'drsp-msg-file-chip';
+          chip.textContent = f.name;
+          files.appendChild(chip);
+        });
+        attWrap.appendChild(files);
+      }
+
+      div.appendChild(attWrap);
+    }
+
     const actions = document.createElement('div');
     actions.className = 'drsp-msg-actions';
     // 加个“重试”按钮
@@ -885,7 +923,15 @@ async function sendChatMessage(text, opts = {}) {
   const optimisticText = `${trimmed}${uploadHint}`.trim();
 
   __localChatHistory = Array.isArray(__localChatHistory) ? __localChatHistory.slice() : [];
-  __localChatHistory.push({ role: 'user', rawMessage: optimisticText, message: optimisticText, messageId: pendingId });
+  const optimisticMsg = {
+    role: 'user',
+    rawMessage: optimisticText,
+    message: optimisticText,
+    messageId: pendingId,
+    images: allowUploads ? (__selectedImages || []).map((x) => ({ id: x.id, data: x.data, name: x.name })) : [],
+    attachments: [],
+  };
+  __localChatHistory.push(optimisticMsg);
   renderChat(__localChatHistory);
 
   let images = [];
@@ -896,6 +942,7 @@ async function sendChatMessage(text, opts = {}) {
     // 不再将文件内容拼接到消息，仅提示文件名，将内容通过 attachments 传给后台
     const fileTexts = await readSelectedFilesAsText();
     attachments = fileTexts || [];
+    if (optimisticMsg) optimisticMsg.attachments = attachments;
     if (attachments && attachments.length) {
       const names = attachments.map((f) => f.name || '文件');
       if (!composed) composed = `[附件] ${names.join('，')}`;
