@@ -1007,7 +1007,7 @@ async function init() {
 // 这段代码是扩展功能的重要组成部分，它连接了扩展的弹出界面和内容脚本，使用户能够通过点击扩展图标和按钮来控制DeepRead功能。
 if (isExtensionEnvironment) {
     chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
-        console.log('Content script received message:', request);
+        console.log('「Deepread」 收到请求（请检查VPN）:', request);
         if (request.action === 'deepread_sp_get_state') {
             sendResponse({
                 ok: true,
