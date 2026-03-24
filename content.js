@@ -465,7 +465,9 @@ function showFloatActionsForExistingHighlight({ x, y, highlight, paragraphId } =
                     anchorData.end = highlight.end;
                     anchorData.text = highlight.text;
                 }
-                openDeepReadWithConcept(text, anchorData);
+                preventDuplicateClick('float_explain', () => {
+                    openDeepReadWithConcept(text, anchorData);
+                }, 3000);
             });
         }
 
@@ -1007,7 +1009,13 @@ async function init() {
 // 这段代码是扩展功能的重要组成部分，它连接了扩展的弹出界面和内容脚本，使用户能够通过点击扩展图标和按钮来控制DeepRead功能。
 if (isExtensionEnvironment) {
     chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
-        console.log('「Deepread」 收到请求（请检查VPN）:', request);
+        let path = '';
+        try {
+            path = window && window.location && window.location.pathname ? String(window.location.pathname) : '';
+        } catch (e) {
+            path = '';
+        }
+        console.debug(`「Deepread」${path ? '[' + path + ']' : ''} 收到请求（请检查VPN）:`, request);
         if (request.action === 'deepread_sp_get_state') {
             sendResponse({
                 ok: true,
@@ -1179,8 +1187,49 @@ if (isExtensionEnvironment) {
                     if (!pageContent) {
                         try { pageContent = extractPageContent(); } catch (e) { /* no-op */ }
                     }
+                    // SidePanel 概念解释：优先命中缓存，避免重复调用 LLM
+                    let conceptKey = '';
+                    try {
+                        if (window.cacheManager && typeof window.cacheManager.hashString === 'function') {
+                            conceptKey = 'concept_' + window.cacheManager.hashString(conceptName);
+                        }
+                    } catch (e) {
+                        conceptKey = '';
+                    }
+
+                    let conceptHistoryArr = Array.isArray(conceptHistory) ? conceptHistory : [];
+                    const existingIndex = conceptHistoryArr.findIndex(item =>
+                        item && ((conceptKey && item.conceptKey === conceptKey) || (!conceptKey && item.name === conceptName) || item.name === conceptName)
+                    );
+                    if (existingIndex >= 0) {
+                        const cachedResp = conceptHistoryArr[existingIndex] && conceptHistoryArr[existingIndex].response
+                            ? conceptHistoryArr[existingIndex].response
+                            : null;
+                        if (cachedResp) {
+                            sendResponse({ ok: true, conceptResult: cachedResp, cached: true });
+                            return;
+                        }
+                    }
+
                     const conceptResult = await callExplanationConcept(conceptName, pageContent);
-                    sendResponse({ ok: true, conceptResult });
+                    try {
+                        conceptHistoryArr = Array.isArray(conceptHistory) ? conceptHistory : [];
+                        conceptHistoryArr.push({
+                            name: conceptName,
+                            conceptKey: conceptKey || undefined,
+                            response: conceptResult,
+                            timestamp: Date.now(),
+                        });
+                        conceptHistory = conceptHistoryArr;
+                        if (window.cacheManager && typeof window.cacheManager.saveConceptHistory === 'function') {
+                            window.cacheManager.saveConceptHistory(conceptHistoryArr)
+                                .catch(error => console.error('保存概念查询历史到缓存失败:', error));
+                        }
+                    } catch (e) {
+                        // ignore
+                    }
+
+                    sendResponse({ ok: true, conceptResult, cached: false });
                 } catch (err) {
                     console.error('SidePanel explain failed:', err);
                     sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
@@ -2546,7 +2595,9 @@ function addTextSelectionListener() {
                         anchorData.end = lastSelectionOffsets.end;
                         anchorData.text = lastSelectionOffsets.text;
                     }
-                    openDeepReadWithConcept(selectedText, anchorData);
+                    preventDuplicateClick('float_explain', () => {
+                        openDeepReadWithConcept(selectedText, anchorData);
+                    }, 3000);
                     })();
                 });
             }
@@ -5228,7 +5279,9 @@ function updateExplanationArea(conceptName, llmResponse, displayName, conceptKey
                 targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
                 // 解释该段落
-                openDeepReadWithConcept(targetElement.textContent);
+                preventDuplicateClick('explain_paragraph', () => {
+                    openDeepReadWithConcept(targetElement.textContent);
+                }, 3000);
             }
         });
     });
@@ -5433,6 +5486,24 @@ async function sendChatMessage() {
         console.log('消息为空，不发送');
         return;
     }
+
+    // 发送入口防重：3秒内不重复触发（避免重复请求 LLM）
+    const shouldRun = preventDuplicateClick('chat_send', () => {
+        // callback 里触发异步流程
+        ;(async () => {
+            try {
+                await doSendChatMessage(message, chatInput);
+            } catch (e) {
+                // 出错时允许用户立即重试
+                try { delete clickCooldowns['chat_send']; } catch (err) { /* ignore */ }
+                throw e;
+            }
+        })();
+    }, 3000);
+    if (!shouldRun) return;
+}
+
+async function doSendChatMessage(message, chatInput) {
     
     // 添加用户消息到对话历史，包含图片
     addChatMessage(message, 'user', false, true, selectedImages);
@@ -6850,13 +6921,20 @@ function exportChatHistoryAsMarkdown() {
 
 // 调试输出函数（核心代码）
 function debugLog(message) {
-    console.debug('DEBUG <-----> ' + message);
+    let path = '';
+    try {
+        path = window && window.location && window.location.pathname ? String(window.location.pathname) : '';
+    } catch (e) {
+        path = '';
+    }
+    const prefix = path ? `[${path}] ` : '';
+    console.debug('DEBUG <-----> ' + prefix + message);
     // 在Chrome扩展环境中，不需要显示调试区域
     if (!isExtensionEnvironment) {
         const debugLog = document.getElementById('debug-log');
         if (debugLog) {
             const logEntry = document.createElement('div');
-            logEntry.textContent = message;
+            logEntry.textContent = prefix + message;
             debugLog.appendChild(logEntry);
             // 滚动到底部
             debugLog.scrollTop = debugLog.scrollHeight;

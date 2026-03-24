@@ -11,11 +11,113 @@ let __chatSearchQuery = '';
 let __chatSearchHits = [];
 let __chatSearchIndex = -1;
 let __chatSearchMarks = [];
+let __pageAnalyzed = false;
+const __spExplainCache = new Map();
+let __spExplainCacheUrl = '';
 const DRSP_FONT_SIZE_KEY = 'deepread_sp_font_size_px';
 const DRSP_FONT_SIZE_OPTIONS = [12, 14, 16, 18];
 
 function qs(id) {
   return document.getElementById(id);
+}
+
+const __btnGuardState = new Map();
+const __actionGuardState = new Map();
+let __sendBtnEl = null;
+
+function __getBtnGuard(btnId) {
+  if (!__btnGuardState.has(btnId)) {
+    __btnGuardState.set(btnId, { inFlight: false, lockedUntil: 0, timer: null });
+  }
+  return __btnGuardState.get(btnId);
+}
+
+function __getActionGuard(actionKey) {
+  const k = String(actionKey || '');
+  if (!__actionGuardState.has(k)) {
+    __actionGuardState.set(k, { inFlight: false, lockedUntil: 0, timer: null });
+  }
+  return __actionGuardState.get(k);
+}
+
+function __applyActionGuardUi(btnEl, actionKey) {
+  if (!btnEl) return;
+  const st = __getActionGuard(actionKey);
+  const now = Date.now();
+  const shouldDisable = !!st.inFlight || now < (st.lockedUntil || 0);
+  try { btnEl.disabled = shouldDisable; } catch (e) { /* no-op */ }
+}
+
+async function withActionGuard(actionKey, fn, cooldownMs = 3000, btnEl = null) {
+  const st = __getActionGuard(actionKey);
+  const now = Date.now();
+  if (st.inFlight) {
+    __applyActionGuardUi(btnEl, actionKey);
+    return;
+  }
+  if (now < (st.lockedUntil || 0)) {
+    __applyActionGuardUi(btnEl, actionKey);
+    return;
+  }
+
+  st.inFlight = true;
+  __applyActionGuardUi(btnEl, actionKey);
+  try {
+    return await fn();
+  } finally {
+    st.inFlight = false;
+    st.lockedUntil = Date.now() + Math.max(0, Number(cooldownMs) || 0);
+    __applyActionGuardUi(btnEl, actionKey);
+
+    if (st.timer) {
+      try { clearTimeout(st.timer); } catch (e) { /* no-op */ }
+      st.timer = null;
+    }
+    const wait = Math.max(0, st.lockedUntil - Date.now());
+    st.timer = setTimeout(() => {
+      st.timer = null;
+      __applyActionGuardUi(btnEl, actionKey);
+    }, wait);
+  }
+}
+
+function __applyBtnGuardUi(btnId) {
+  const btn = qs(btnId);
+  if (!btn) return;
+  const st = __getBtnGuard(btnId);
+  const now = Date.now();
+  const shouldDisable = !!st.inFlight || now < (st.lockedUntil || 0);
+  btn.disabled = shouldDisable;
+}
+
+async function withButtonGuard(btnId, fn, cooldownMs = 3000) {
+  const st = __getBtnGuard(btnId);
+  const now = Date.now();
+  if (st.inFlight) return;
+  if (now < (st.lockedUntil || 0)) {
+    __applyBtnGuardUi(btnId);
+    return;
+  }
+
+  st.inFlight = true;
+  __applyBtnGuardUi(btnId);
+  try {
+    return await fn();
+  } finally {
+    st.inFlight = false;
+    st.lockedUntil = Date.now() + Math.max(0, Number(cooldownMs) || 0);
+    __applyBtnGuardUi(btnId);
+
+    if (st.timer) {
+      try { clearTimeout(st.timer); } catch (e) { /* no-op */ }
+      st.timer = null;
+    }
+    const wait = Math.max(0, st.lockedUntil - Date.now());
+    st.timer = setTimeout(() => {
+      st.timer = null;
+      __applyBtnGuardUi(btnId);
+    }, wait);
+  }
 }
 
 function setSectionCollapsed(sectionBodyId, collapsed) {
@@ -92,21 +194,29 @@ function scheduleSaveFontSize(px) {
 function bindTabSyncEvents() {
   try {
     chrome.tabs.onActivated.addListener(async () => {
-      await forceUpdateActiveTabId();
       try {
-        lastSeenTabUrl = await getActiveTabUrl();
+        await forceUpdateActiveTabId();
+        try {
+          lastSeenTabUrl = await getActiveTabUrl();
+        } catch (e) {
+          // ignore
+        }
+        await refreshState();
       } catch (e) {
         // ignore
       }
-      await refreshState();
     });
 
     chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
       // 当前活动 tab 导航完成后刷新；避免加载中频繁刷新
       if (typeof activeTabId !== 'number' || tabId !== activeTabId) return;
       if (changeInfo && changeInfo.status === 'complete') {
-        await forceUpdateActiveTabId();
-        await refreshState();
+        try {
+          await forceUpdateActiveTabId();
+          await refreshState();
+        } catch (e) {
+          // ignore
+        }
       }
     });
   } catch (e) {
@@ -177,9 +287,8 @@ async function insertSummaryToChat() {
 }
 
 async function getActiveTabId() {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs && tabs[0];
-  activeTabId = tab && typeof tab.id === 'number' ? tab.id : null;
+  const tabId = await resolveNormalActiveTabId();
+  activeTabId = typeof tabId === 'number' ? tabId : null;
   return activeTabId;
 }
 
@@ -189,25 +298,117 @@ async function forceUpdateActiveTabId() {
 }
 
 async function getActiveTabUrl() {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs && tabs[0];
-  const url = tab && tab.url ? String(tab.url) : '';
-  return url;
+  try {
+    const tabId = await resolveNormalActiveTabId();
+    if (typeof tabId !== 'number') return '';
+    const tab = await chrome.tabs.get(tabId);
+    return tab && tab.url ? String(tab.url) : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function isNonWebTabUrl(url) {
+  const u = String(url || '');
+  if (!u) return true;
+  return u.startsWith('chrome-extension://') || u.startsWith('chrome://') || u.startsWith('edge://') || u.startsWith('about:');
+}
+
+async function resolveNormalActiveTabId() {
+  try {
+    const w = await chrome.windows.getLastFocused({ populate: false });
+    if (w && w.type === 'normal' && typeof w.id === 'number') {
+      const tabs = await chrome.tabs.query({ active: true, windowId: w.id });
+      const tab = tabs && tabs[0];
+      if (tab && typeof tab.id === 'number' && !isNonWebTabUrl(tab.url)) return tab.id;
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  try {
+    const wins = await chrome.windows.getAll({ populate: true });
+    const normalWins = (wins || []).filter((x) => x && x.type === 'normal');
+    for (const w of normalWins) {
+      const tabs = w && w.tabs ? w.tabs : [];
+      const hit = (tabs || []).find((t) => t && t.active && typeof t.id === 'number' && !isNonWebTabUrl(t.url));
+      if (hit && typeof hit.id === 'number') return hit.id;
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  return null;
+}
+
+async function resolveTargetTabId() {
+  // 优先使用已记录的 tabId
+  if (typeof activeTabId === 'number') {
+    try {
+      const tab = await chrome.tabs.get(activeTabId);
+      if (tab && tab.url && !isNonWebTabUrl(tab.url)) return activeTabId;
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  // 其次：按 lastSeenTabUrl 在当前窗口中精确匹配（避免 DevTools / 切换焦点导致 active tab 不是你以为的那个）
+  const targetUrl = lastSeenTabUrl ? String(lastSeenTabUrl) : '';
+  if (targetUrl) {
+    try {
+      const tabs = await chrome.tabs.query({ url: targetUrl });
+      const hit = (tabs || []).find((t) => t && typeof t.id === 'number' && t.url && String(t.url) === targetUrl);
+      if (hit && typeof hit.id === 'number') return hit.id;
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  // 最后兜底：当前活动 tab
+  return await getActiveTabId();
 }
 
 async function sendToContent(action, payload = {}) {
-  const tabId = await getActiveTabId();
-  if (typeof tabId !== 'number') throw new Error('No active tab');
+  const attempt = async (retried) => {
+    const tabId = await resolveTargetTabId();
+    if (typeof tabId !== 'number') throw new Error('No active tab');
 
-  return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(tabId, { action, ...payload }, (resp) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      resolve(resp);
+    return new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(tabId, { action, ...payload }, async (resp) => {
+        if (chrome.runtime.lastError) {
+          const msg = String(chrome.runtime.lastError.message || '');
+          // 典型场景：目标 tab 没有注入 content script（Receiving end does not exist）
+          if (!retried && msg.includes('Receiving end does not exist')) {
+            try {
+              activeTabId = null;
+              // 允许重新跟随当前 active tab
+              lastSeenTabUrl = '';
+              await forceUpdateActiveTabId();
+              const r = await attempt(true);
+              resolve(r);
+              return;
+            } catch (e) {
+              reject(e);
+              return;
+            }
+          }
+          reject(new Error(msg));
+          return;
+        }
+        resolve(resp);
+      });
     });
-  });
+  };
+
+  return await attempt(false);
+}
+
+async function safeSendToContent(action, payload = {}) {
+  try {
+    return await sendToContent(action, payload);
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
 }
 
 function escapeHtml(s) {
@@ -698,7 +899,7 @@ function renderParagraphs(containerId, paragraphs) {
     explainBtn.className = 'drsp-btn';
     explainBtn.textContent = '解释此段';
     explainBtn.addEventListener('click', async () => {
-      await explainConcept(String(pid));
+      await withActionGuard(`drsp_explain_paragraph_${pid}`, () => explainConcept(String(pid)), 3000, explainBtn);
     });
 
     actions.appendChild(navBtn);
@@ -724,7 +925,7 @@ function renderAnalysis(analysis) {
       chip.className = 'drsp-chip';
       chip.textContent = String(t);
       chip.addEventListener('click', async () => {
-        await explainConcept(String(t));
+        await withActionGuard(`drsp_explain_concept_${String(t)}`, () => explainConcept(String(t)), 3000, chip);
       });
       keyterms.appendChild(chip);
     });
@@ -802,7 +1003,6 @@ function openManualAnalyzeModal() {
       return;
     }
     okBtn.disabled = true;
-    closeBtn.disabled = true;
     okBtn.textContent = '分析中...';
 
     try {
@@ -822,7 +1022,6 @@ function openManualAnalyzeModal() {
     } catch (e) {
       alert(String(e && e.message ? e.message : e));
       okBtn.disabled = false;
-      closeBtn.disabled = false;
       okBtn.textContent = '确认分析';
     }
   });
@@ -841,9 +1040,34 @@ function renderConcept(conceptName, resp) {
 }
 
 async function refreshState() {
-  const resp = await sendToContent('deepread_sp_get_state');
+  const resp = await safeSendToContent('deepread_sp_get_state');
   if (resp && resp.ok) {
     renderMeta(resp.pageMeta);
+    try {
+      __pageAnalyzed = !!resp.pageAnalyzed;
+    } catch (e) {
+      __pageAnalyzed = false;
+    }
+    try {
+      const u = resp.pageMeta && resp.pageMeta.url ? String(resp.pageMeta.url) : '';
+      if (u) {
+        // tab/url 切换时清空概念解释缓存，避免跨页面复用
+        if (u !== __spExplainCacheUrl) {
+          __spExplainCacheUrl = u;
+          try { __spExplainCache.clear(); } catch (e) { /* ignore */ }
+        }
+        lastSeenTabUrl = u;
+        try {
+          const tabs = await chrome.tabs.query({ url: u });
+          const hit = (tabs || []).find((t) => t && typeof t.id === 'number' && t.url && String(t.url) === u);
+          if (hit && typeof hit.id === 'number') activeTabId = hit.id;
+        } catch (e) {
+          // ignore
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
     __localChatHistory = resp.chatHistory || [];
     renderChat(__localChatHistory);
     if (resp.analysisResult) {
@@ -855,13 +1079,17 @@ async function refreshState() {
 }
 
 async function hardRefresh() {
-  await forceUpdateActiveTabId();
   try {
-    lastSeenTabUrl = await getActiveTabUrl();
+    await forceUpdateActiveTabId();
+    try {
+      lastSeenTabUrl = await getActiveTabUrl();
+    } catch (e) {
+      // ignore
+    }
+    await refreshState();
   } catch (e) {
     // ignore
   }
-  await refreshState();
 }
 
 let __configWindowId = null;
@@ -891,7 +1119,7 @@ async function openConfigWindow() {
 }
 
 async function analyzeFull() {
-  const resp = await sendToContent('deepread_sp_analyze_full');
+  const resp = await safeSendToContent('deepread_sp_analyze_full');
   if (resp && resp.ok) {
     renderAnalysis(resp.analysisResult);
     await refreshState();
@@ -899,8 +1127,28 @@ async function analyzeFull() {
 }
 
 async function explainConcept(conceptName) {
-  const resp = await sendToContent('deepread_sp_explain', { conceptName });
+  const cacheKey = `sp_explain_${String(conceptName || '')}`;
+  if (__spExplainCache.has(cacheKey)) {
+    console.log('页面已解释过，显示已缓存的内容');
+    try {
+      const cached = __spExplainCache.get(cacheKey);
+      renderConcept(conceptName, cached);
+    } catch (e) {
+      // ignore
+    }
+    return;
+  }
+  const resp = await safeSendToContent('deepread_sp_explain', { conceptName });
   if (resp && resp.ok) {
+    // 仅当 content 侧明确返回“命中缓存”时，才在 SidePanel 侧缓存并阻止重复解释
+    // 若未命中缓存（cached=false），允许多次解释（每次都会请求 content/LLM）
+    try {
+      if (resp.cached === true) {
+        __spExplainCache.set(cacheKey, resp.conceptResult);
+      }
+    } catch (e) {
+      // ignore
+    }
     renderConcept(conceptName, resp.conceptResult);
     await refreshState();
   }
@@ -1065,13 +1313,35 @@ function bindEvents() {
   }
 
   const analyzeBtn = qs('drsp-analyze');
-  if (analyzeBtn) analyzeBtn.addEventListener('click', analyzeFull);
+  if (analyzeBtn) {
+    analyzeBtn.addEventListener('click', async () => {
+      try {
+        if (__pageAnalyzed) {
+          console.log('页面已分析过，显示已缓存的内容');
+        } else {
+          console.log('正在全文分析...');
+        }
+        await withButtonGuard('drsp-analyze', analyzeFull, 3000);
+      } catch (e) {
+        showErrorDialog('分析失败', e && e.message ? e.message : String(e));
+      }
+    });
+  }
 
   const manualAnalyzeBtn = qs('drsp-manual-analyze');
   if (manualAnalyzeBtn) manualAnalyzeBtn.addEventListener('click', openManualAnalyzeModal);
 
   const refreshBtn = qs('drsp-refresh');
-  if (refreshBtn) refreshBtn.addEventListener('click', hardRefresh);
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', async () => {
+      try {
+        console.log('正在刷新');
+        await withButtonGuard('drsp-refresh', hardRefresh, 3000);
+      } catch (e) {
+        showErrorDialog('刷新失败', e && e.message ? e.message : String(e));
+      }
+    });
+  }
 
   const cfg = qs('drsp-config');
   if (cfg) cfg.addEventListener('click', openConfigWindow);
@@ -1104,9 +1374,10 @@ function bindEvents() {
 
   const sendBtn = qs('drsp-send');
   if (sendBtn) {
+    __sendBtnEl = sendBtn;
     sendBtn.addEventListener('click', async () => {
       try {
-        await sendChat();
+        await withActionGuard('drsp_chat_send', sendChat, 3000, sendBtn);
       } catch (e) {
         showErrorDialog('发送失败', e && e.message ? e.message : String(e));
       }
@@ -1173,7 +1444,7 @@ function bindEvents() {
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && e.shiftKey) {
         e.preventDefault();
-        sendChat();
+        withActionGuard('drsp_chat_send', sendChat, 3000, __sendBtnEl);
       }
     });
 
@@ -1348,10 +1619,30 @@ async function showTextInputDialog(title, message, presetValue = '') {
 }
 
 (async function init() {
+  try {
+    window.addEventListener('unhandledrejection', (event) => {
+      try {
+        const reason = event && event.reason;
+        const msg = reason && reason.message ? reason.message : String(reason);
+        // 避免 sidepanel 控制台刷屏
+        console.warn('DeepRead SidePanel unhandledrejection:', msg);
+        event.preventDefault();
+      } catch (e) {
+        // ignore
+      }
+    });
+  } catch (e) {
+    // ignore
+  }
+
   await loadFontSizeSetting();
   bindEvents();
   bindTabSyncEvents();
   startUrlWatcher();
   bindConfigAutoRefresh();
-  await hardRefresh();
+  try {
+    await hardRefresh();
+  } catch (e) {
+    showErrorDialog('刷新失败', e && e.message ? e.message : String(e));
+  }
 })();

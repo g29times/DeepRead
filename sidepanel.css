@@ -84,8 +84,21 @@ body {
   cursor: pointer;
 }
 
+.drsp-btn:disabled,
+.drsp-btn[disabled] {
+  background: #f3f4f6;
+  border-color: #e5e7eb;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
 .drsp-btn:hover {
   background: #f9fafb;
+}
+
+.drsp-btn:disabled:hover,
+.drsp-btn[disabled]:hover {
+  background: #f3f4f6;
 }
 
 .drsp-primary {
