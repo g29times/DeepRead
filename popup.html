@@ -2,7 +2,9 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>DeepRead 深度阅读助手</title>
+    <meta name="keywords" content="DeepRead,深度阅读,智能解读,交互式导航,复杂研究,专业术语">
+    <meta name="description" content="提供智能解读和交互式导航的专业深度阅读助手，帮助您理解复杂网页和专业术语。">
+    <title>DeepRead 更专业的阅读助手</title>
     <link rel="stylesheet" href="popup-style.css">
     <style>
         body {
@@ -68,22 +70,19 @@
 <body>
     <div class="header">
         <div class="logo">DR</div>
-        <h1>DeepRead 深度阅读助手</h1>
-    </div>
-    
-    <div class="description">
-        提供智能解读和交互式导航的深度阅读助手，帮助您理解复杂文章和专业术语。
+        <h1>DeepRead 专业阅读精灵</h1>
     </div>
 
     <div class="status" style="margin-top: 0;">
-        <div style="font-weight: 700; margin-bottom: 6px;">配置</div>
         <div style="display:flex; flex-direction:column; gap:8px;">
             <div>
-                <div style="font-size:12px; color:#555; margin-bottom:4px;">Google Gemini API Key</div>
+                <div style="font-size:12px; color:#666;">
+                    <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">填写或获取 Gemini API Key</a>
+                </div>
                 <input id="dr-popup-api-key" type="password" placeholder="输入您的 API Key..." style="width:100%; box-sizing:border-box; padding:8px; border:1px solid #ddd; border-radius:4px;" />
             </div>
             <div>
-                <div style="font-size:12px; color:#555; margin-bottom:4px;">模型</div>
+                <div style="font-size:12px; color:#555; margin-bottom:4px;">选择模型</div>
                 <select id="dr-popup-model" style="width:100%; box-sizing:border-box; padding:8px; border:1px solid #ddd; border-radius:4px;">
                     <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
                     <option value="gemini-flash-lite-latest">gemini-flash-lite-latest</option>
@@ -93,7 +92,7 @@
                 <input id="dr-popup-model-custom" type="text" placeholder="输入自定义模型名称..." style="display:none; width:100%; box-sizing:border-box; padding:8px; border:1px solid #ddd; border-radius:4px; margin-top:8px;" />
             </div>
             <div>
-                <div style="font-size:12px; color:#555; margin-bottom:4px;">Thinking Level</div>
+                <div style="font-size:12px; color:#555; margin-bottom:4px;">Thinking 思考 Level</div>
                 <div style="display:flex; gap:8px; align-items:center;">
                     <input id="dr-popup-thinking" type="range" min="0" max="4" value="0" step="1" style="flex:1;" />
                     <div id="dr-popup-thinking-label" style="min-width:70px; text-align:right; font-size:12px; color:#333;">OFF</div>
@@ -107,6 +106,31 @@
                 </div>
             </div>
             <div>
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                    <div style="font-size:12px; color:#555;">记忆系统</div>
+                    <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:#333; user-select:none;">
+                        <input id="dr-popup-mem0-enabled" type="checkbox" />
+                        启用
+                    </label>
+                </div>
+                <div style="margin-top:8px;">
+                    <div style="font-size:12px; color:#666;">
+                        <a href="https://app.mem0.ai/dashboard/api-keys" target="_blank" rel="noreferrer">获取 Mem0 API Key</a>
+                    </div>
+                    <input id="dr-popup-mem0-api-key" type="password" placeholder="m0-..." style="width:100%; box-sizing:border-box; padding:8px; border:1px solid #ddd; border-radius:4px;" />
+                </div>
+                <div style="display:flex; gap:8px; margin-top:8px;">
+                    <div style="flex:1;">
+                        <div style="font-size:12px; color:#555; margin-bottom:4px;">User ID（可选）</div>
+                        <input id="dr-popup-mem0-user-id" type="text" placeholder="neo" style="width:100%; box-sizing:border-box; padding:8px; border:1px solid #ddd; border-radius:4px;" />
+                    </div>
+                    <div style="flex:1;">
+                        <div style="font-size:12px; color:#555; margin-bottom:4px;">Agent ID（可选）</div>
+                        <input id="dr-popup-mem0-agent-id" type="text" placeholder="deepread" style="width:100%; box-sizing:border-box; padding:8px; border:1px solid #ddd; border-radius:4px;" />
+                    </div>
+                </div>
+            </div>
+            <div>
                 <div style="font-size:12px; color:#555; margin-bottom:4px;">Feishu Webhook URL（可选）</div>
                 <input id="dr-popup-feishu" type="text" placeholder="https://www.feishu.cn/flow/api/trigger-webhook/..." style="width:100%; box-sizing:border-box; padding:8px; border:1px solid #ddd; border-radius:4px;" />
             </div>
@@ -114,16 +138,14 @@
                 <button id="dr-popup-save" style="flex:1;">保存设置</button>
                 <button id="dr-popup-open-sidepanel" style="flex:1; background:#111827;">打开侧栏</button>
             </div>
-            <div style="font-size:12px; color:#666;">
-                <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">获取 Gemini API Key</a>
-            </div>
+            
         </div>
     </div>
     
-    <div class="button-container">
+    <!-- <div class="button-container">
         <button id="startReading">开始深度阅读（分析当前页面）</button>
         <button id="togglePanel">显示/隐藏面板（旧）</button>
-    </div>
+    </div> -->
     
     <div class="status" id="status">
         状态: 准备就绪，点击"开始深度阅读"分析当前页面。

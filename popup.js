@@ -40,6 +40,11 @@ const THINKING_LEVEL_TO_VALUE = {
     4: 'HIGH',
 };
 
+const MEM0_ENABLED_KEY = 'deepread_mem0_enabled';
+const MEM0_API_KEY_KEY = 'deepread_mem0_api_key';
+const MEM0_USER_ID_KEY = 'deepread_mem0_user_id';
+const MEM0_AGENT_ID_KEY = 'deepread_mem0_agent_id';
+
 function setThinkingLabel(v) {
     const n = Number(v);
     const idx = Number.isFinite(n) ? Math.max(0, Math.min(4, Math.round(n))) : 0;
@@ -53,13 +58,22 @@ async function loadSettingsToPopup() {
             'deepread_api_key',
             'deepread_model',
             'deepread_thinking_level',
-            'deepread_feishu_webhook_url'
+            'deepread_feishu_webhook_url',
+            MEM0_ENABLED_KEY,
+            MEM0_API_KEY_KEY,
+            MEM0_USER_ID_KEY,
+            MEM0_AGENT_ID_KEY,
         ]);
 
         const apiKey = res && res.deepread_api_key ? String(res.deepread_api_key) : '';
         const model = res && res.deepread_model ? String(res.deepread_model) : 'gemini-3-flash-preview';
         const thinkingRaw = res && typeof res.deepread_thinking_level !== 'undefined' ? String(res.deepread_thinking_level || '').trim() : '';
         const feishu = res && res.deepread_feishu_webhook_url ? String(res.deepread_feishu_webhook_url) : '';
+
+        const mem0Enabled = !!(res && res[MEM0_ENABLED_KEY]);
+        const mem0ApiKey = res && res[MEM0_API_KEY_KEY] ? String(res[MEM0_API_KEY_KEY]) : '';
+        const mem0UserId = res && res[MEM0_USER_ID_KEY] ? String(res[MEM0_USER_ID_KEY]) : '';
+        const mem0AgentId = res && res[MEM0_AGENT_ID_KEY] ? String(res[MEM0_AGENT_ID_KEY]) : '';
 
         const apiInput = document.getElementById('dr-popup-api-key');
         if (apiInput) apiInput.value = apiKey;
@@ -93,6 +107,18 @@ async function loadSettingsToPopup() {
 
         const feishuInput = document.getElementById('dr-popup-feishu');
         if (feishuInput) feishuInput.value = feishu;
+
+        const mem0EnabledEl = document.getElementById('dr-popup-mem0-enabled');
+        if (mem0EnabledEl) mem0EnabledEl.checked = mem0Enabled;
+
+        const mem0ApiKeyEl = document.getElementById('dr-popup-mem0-api-key');
+        if (mem0ApiKeyEl) mem0ApiKeyEl.value = mem0ApiKey;
+
+        const mem0UserIdEl = document.getElementById('dr-popup-mem0-user-id');
+        if (mem0UserIdEl) mem0UserIdEl.value = mem0UserId;
+
+        const mem0AgentIdEl = document.getElementById('dr-popup-mem0-agent-id');
+        if (mem0AgentIdEl) mem0AgentIdEl.value = mem0AgentId;
     } catch (e) {
         // ignore
     }
@@ -105,6 +131,11 @@ async function saveSettingsFromPopup() {
     const thinkingLevel = Number(document.getElementById('dr-popup-thinking')?.value || 0);
     const feishu = String(document.getElementById('dr-popup-feishu')?.value || '').trim();
 
+    const mem0Enabled = !!document.getElementById('dr-popup-mem0-enabled')?.checked;
+    const mem0ApiKey = String(document.getElementById('dr-popup-mem0-api-key')?.value || '').trim();
+    const mem0UserId = String(document.getElementById('dr-popup-mem0-user-id')?.value || '').trim();
+    const mem0AgentId = String(document.getElementById('dr-popup-mem0-agent-id')?.value || '').trim();
+
     const modelId = modelSel === 'custom' ? modelCustom : modelSel;
     const thinkingValue = THINKING_LEVEL_TO_VALUE[Math.max(0, Math.min(4, Math.round(Number.isFinite(thinkingLevel) ? thinkingLevel : 0)))] || '';
 
@@ -113,6 +144,10 @@ async function saveSettingsFromPopup() {
         deepread_model: modelId,
         deepread_thinking_level: thinkingValue,
         deepread_feishu_webhook_url: feishu,
+        [MEM0_ENABLED_KEY]: mem0Enabled,
+        [MEM0_API_KEY_KEY]: mem0ApiKey,
+        [MEM0_USER_ID_KEY]: mem0UserId,
+        [MEM0_AGENT_ID_KEY]: mem0AgentId,
     });
 }
 

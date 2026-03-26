@@ -1290,6 +1290,19 @@ if (isExtensionEnvironment) {
                         await saveTabChatHistory(chatHistory);
                     }
 
+                    // SidePanel 对话：对话后异步写入 mem0，不影响主流程
+                    try {
+                        const userMsg = (message || fallbackPrompt).trim();
+                        if (userMsg) {
+                            addMemory(userMsg, { type: 'single_message', role: 'user' });
+                        }
+                        if (responseText) {
+                            addMemory(String(responseText || ''), { type: 'single_message', role: 'assistant' });
+                        }
+                    } catch (e) {
+                        // ignore
+                    }
+
                     sendResponse({ ok: true, chatHistory });
                 } catch (err) {
                     console.error('SidePanel chat_send failed:', err);
@@ -5568,7 +5581,7 @@ async function chatWithAI(userMessage, chatHistory = [], pageContent = '', image
     }
 
     // 系统提示词
-    const systemPrompt = `
+    let systemPrompt = `
         我是一个专业的深度阅读助手DeepRead，帮助用户进行网页浏览和理解。
         我的语言风格将与用户相仿。
         我和用户主要围绕当前页面内容对话，也可能穿插讨论多个不同的页面。
@@ -5587,7 +5600,7 @@ async function chatWithAI(userMessage, chatHistory = [], pageContent = '', image
     // 如果有相关记忆，添加到系统提示词中
     if (relatedMemories && relatedMemories.length > 0) {
         systemPrompt += `
-            以下是与当前问题相关的历史记忆：'''
+            以下是mem0平台查到的可能与问题相关的记忆（仅供参考）：'''
         `;
         relatedMemories.forEach((memory, index) => {
             systemPrompt += `记忆${index + 1}：${memory}\n`;
