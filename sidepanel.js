@@ -547,7 +547,80 @@ function renderChat(history) {
 
     const actions = document.createElement('div');
     actions.className = 'drsp-msg-actions';
-    // 加个“重试”按钮
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'drsp-msg-action';
+    editBtn.textContent = '编辑';
+    editBtn.disabled = !messageId || String(messageId).startsWith('sp_pending_');
+    editBtn.addEventListener('click', async () => {
+      if (editBtn.disabled) return;
+      if (div.classList.contains('drsp-msg-editing')) return;
+
+      div.classList.add('drsp-msg-editing');
+      const textarea = document.createElement('textarea');
+      textarea.className = 'drsp-msg-editarea';
+      textarea.value = raw;
+      content.innerHTML = '';
+      content.appendChild(textarea);
+      textarea.focus();
+      try {
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      } catch (e) {
+        // ignore
+      }
+
+      let saving = false;
+      const restore = () => {
+        try {
+          div.classList.remove('drsp-msg-editing');
+        } catch (e) {
+          // ignore
+        }
+        renderChat(__localChatHistory);
+      };
+
+      textarea.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape') {
+          ev.preventDefault();
+          restore();
+          return;
+        }
+        if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) {
+          ev.preventDefault();
+          textarea.blur();
+        }
+      });
+
+      textarea.addEventListener('blur', async () => {
+        if (saving) return;
+        saving = true;
+
+        const nextRaw = String(textarea.value || '').trim();
+        const prevRaw = String(raw || '').trim();
+        if (!nextRaw) {
+          showErrorDialog('保存失败', '内容不能为空');
+          restore();
+          return;
+        }
+        if (nextRaw === prevRaw) {
+          restore();
+          return;
+        }
+
+        try {
+          const resp = await sendToContent('deepread_sp_edit_chat_message', { messageId, rawMessage: nextRaw });
+          if (resp && resp.ok) {
+            __localChatHistory = resp.chatHistory || [];
+            renderChat(__localChatHistory);
+          } else {
+            showErrorDialog('保存失败', resp && resp.error ? resp.error : '');
+            await refreshState();
+          }
+        } catch (e) {
+          showErrorDialog('保存失败', e && e.message ? e.message : String(e));
+        }
+      });
+    });
 
     if (messageId) {
       const retryBtn = document.createElement('button');
@@ -593,6 +666,7 @@ function renderChat(history) {
       }
     });
 
+    actions.appendChild(editBtn);
     actions.appendChild(copyBtn);
     actions.appendChild(delBtn);
     div.appendChild(actions);

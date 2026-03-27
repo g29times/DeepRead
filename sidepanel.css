@@ -369,6 +369,22 @@ body {
   background: #f9fafb;
 }
 
+ .drsp-msg-editarea {
+   width: 100%;
+   box-sizing: border-box;
+   min-height: 88px;
+   border: 1px solid #e5e7eb;
+   border-radius: 10px;
+   padding: 8px;
+   font-size: var(--drsp-font-sm);
+   line-height: 1.6;
+   resize: vertical;
+ }
+
+ .drsp-msg-editing .drsp-msg-actions {
+   opacity: 0.85;
+ }
+
 .drsp-msg-user {
   background: #f9fafb;
 }

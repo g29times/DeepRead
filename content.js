@@ -1393,6 +1393,53 @@ if (isExtensionEnvironment) {
             return true;
         }
 
+        if (request.action === 'deepread_sp_edit_chat_message') {
+            (async () => {
+                try {
+                    const messageId = String(request.messageId || '').trim();
+                    const rawMessage = String(request.rawMessage || '').trim();
+                    if (!messageId) {
+                        sendResponse({ ok: false, error: 'missing messageId' });
+                        return;
+                    }
+                    if (!rawMessage) {
+                        sendResponse({ ok: false, error: 'empty message' });
+                        return;
+                    }
+
+                    const idx = (chatHistory || []).findIndex((m) => String(m && m.messageId ? m.messageId : '') === messageId);
+                    if (idx < 0) {
+                        sendResponse({ ok: false, error: 'message not found' });
+                        return;
+                    }
+
+                    const target = chatHistory[idx] || {};
+                    const role = String(target.role || '').trim();
+                    if (role !== 'user' && role !== 'assistant') {
+                        sendResponse({ ok: false, error: 'invalid role' });
+                        return;
+                    }
+
+                    const updated = {
+                        ...target,
+                        rawMessage,
+                        message: role === 'assistant' ? processChatResponse(rawMessage) : rawMessage,
+                        messageId,
+                    };
+                    chatHistory[idx] = updated;
+
+                    if (CHAT_PERSIST_ENABLED) {
+                        await saveTabChatHistory(chatHistory);
+                    }
+                    sendResponse({ ok: true, chatHistory });
+                } catch (err) {
+                    console.error('SidePanel edit_chat_message failed:', err);
+                    sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
+                }
+            })();
+            return true;
+        }
+
         if (request.action === 'deepread_sp_clear_chat') {
             (async () => {
                 try {
@@ -2723,10 +2770,14 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
             };
         }
 
-        const shouldRetryWithoutThinking = (errorData) => {
+        const shouldRetryWithoutThinking = (errorData, errorText = '') => {
             try {
-                const msg = errorData && errorData.error && errorData.error.message ? String(errorData.error.message) : '';
-                return msg.includes('Thinking level is not supported');
+                const msg1 = errorData && errorData.error && errorData.error.message ? String(errorData.error.message) : '';
+                const msg2 = errorText ? String(errorText) : '';
+                const msg = `${msg1}\n${msg2}`.toLowerCase();
+                return msg.includes('thinking level is not supported')
+                    || msg.includes('thinking is not supported')
+                    || msg.includes('not supported for this model');
             } catch {
                 return false;
             }
@@ -2771,9 +2822,20 @@ async function callGeminiAPI(contents, apiType, expectJson = false, fallbackResp
         
         // 检查响应状态
         if (!response.ok) {
-            const errorData = await response.json();
-            console.error(`${apiType} API请求失败：`, errorData);
-            if (requestBody && requestBody.generationConfig && requestBody.generationConfig.thinkingConfig && shouldRetryWithoutThinking(errorData)) {
+            let errorData = null;
+            let errorText = '';
+            try {
+                errorText = await response.text();
+                try {
+                    errorData = JSON.parse(errorText);
+                } catch {
+                    errorData = null;
+                }
+            } catch {
+                // ignore
+            }
+            console.error(`${apiType} API请求失败：`, errorData || errorText);
+            if (requestBody && requestBody.generationConfig && requestBody.generationConfig.thinkingConfig && shouldRetryWithoutThinking(errorData, errorText)) {
                 try {
                     delete requestBody.generationConfig.thinkingConfig;
                     response = await doFetch();
@@ -2894,10 +2956,14 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
             };
         }
 
-        const shouldRetryWithoutThinking = (errorData) => {
+        const shouldRetryWithoutThinking = (errorData, errorText = '') => {
             try {
-                const msg = errorData && errorData.error && errorData.error.message ? String(errorData.error.message) : '';
-                return msg.includes('Thinking level is not supported');
+                const msg1 = errorData && errorData.error && errorData.error.message ? String(errorData.error.message) : '';
+                const msg2 = errorText ? String(errorText) : '';
+                const msg = `${msg1}\n${msg2}`.toLowerCase();
+                return msg.includes('thinking level is not supported')
+                    || msg.includes('thinking is not supported')
+                    || msg.includes('not supported for this model');
             } catch {
                 return false;
             }
@@ -2955,7 +3021,7 @@ async function callGeminiAPIStream(contents, apiType, onChunk, onComplete, onErr
                 // ignore
             }
             console.error(`${apiType} 流式API请求失败：`, errorData || errorText);
-            if (requestBody && requestBody.generationConfig && requestBody.generationConfig.thinkingConfig && shouldRetryWithoutThinking(errorData)) {
+            if (requestBody && requestBody.generationConfig && requestBody.generationConfig.thinkingConfig && shouldRetryWithoutThinking(errorData, errorText)) {
                 try {
                     delete requestBody.generationConfig.thinkingConfig;
                     response = await doFetchStream();
