@@ -38,7 +38,7 @@ function assert(cond, msg) {
 
 async function main() {
   const apiKey = process.env.GEMINI_API_KEY || '';
-  const model = process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
+  const model = process.env.GEMINI_MODEL || 'gemini-flash-lite-latest';
   const filePathArg = getArg('--file') || process.env.GEMINI_TEST_FILE || '';
   const ttlSeconds = Number(process.env.GEMINI_CACHE_TTL_SECONDS || '900');
 

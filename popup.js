@@ -66,7 +66,7 @@ async function loadSettingsToPopup() {
         ]);
 
         const apiKey = res && res.deepread_api_key ? String(res.deepread_api_key) : '';
-        const model = res && res.deepread_model ? String(res.deepread_model) : 'gemini-3-flash-preview';
+        const model = res && res.deepread_model ? String(res.deepread_model) : 'gemini-flash-lite-latest';
         const thinkingRaw = res && typeof res.deepread_thinking_level !== 'undefined' ? String(res.deepread_thinking_level || '').trim() : '';
         const feishu = res && res.deepread_feishu_webhook_url ? String(res.deepread_feishu_webhook_url) : '';
 
@@ -82,7 +82,7 @@ async function loadSettingsToPopup() {
         const modelCustom = document.getElementById('dr-popup-model-custom');
 
         if (modelSel) {
-            const builtins = ['gemini-2.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3-flash-preview'];
+            const builtins = ['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-3.1-flash-lite-preview'];
             if (builtins.includes(model)) {
                 modelSel.value = model;
                 if (modelCustom) {
@@ -156,61 +156,69 @@ function updateStatus(message) {
     document.getElementById('status').textContent = '状态: ' + message;
 }
 
-// 开始深度阅读
-document.getElementById('startReading').addEventListener('click', function() {
-    sendMessageToContentScript('startReading');
-    updateStatus('正在分析页面内容...');
-    
-    // 模拟分析完成后的状态更新
-    setTimeout(function() {
-        updateStatus('分析完成！请在页面上点击带下划线的概念词汇获取解读。');
-    }, 2000);
-});
-
-// 显示/隐藏面板
-document.getElementById('togglePanel').addEventListener('click', function() {
-    sendMessageToContentScript('togglePanel');
-    updateStatus('面板显示状态已切换。');
-});
-
-document.getElementById('dr-popup-model').addEventListener('change', function() {
-    const v = String(this.value || '');
-    const custom = document.getElementById('dr-popup-model-custom');
-    if (!custom) return;
-    custom.style.display = v === 'custom' ? 'block' : 'none';
-});
-
-document.getElementById('dr-popup-thinking').addEventListener('input', function() {
-    setThinkingLabel(this.value);
-});
-
-document.getElementById('dr-popup-save').addEventListener('click', async function() {
-    try {
-        await saveSettingsFromPopup();
-        updateStatus('设置已保存');
-    } catch (e) {
-        updateStatus('保存失败: ' + String(e && e.message ? e.message : e));
+document.addEventListener('DOMContentLoaded', function() {
+    // 开始深度阅读（如果按钮存在）
+    const startReadingBtn = document.getElementById('startReading');
+    if (startReadingBtn) {
+        startReadingBtn.addEventListener('click', function() {
+            sendMessageToContentScript('startReading');
+            updateStatus('正在分析页面内容...');
+            
+            // 模拟分析完成后的状态更新
+            setTimeout(function() {
+                updateStatus('分析完成！请在页面上点击带下划线的概念词汇获取解读。');
+            }, 2000);
+        });
     }
-});
 
-document.getElementById('dr-popup-open-sidepanel').addEventListener('click', function() {
-    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+    // 显示/隐藏面板（如果按钮存在）
+    const togglePanelBtn = document.getElementById('togglePanel');
+    if (togglePanelBtn) {
+        togglePanelBtn.addEventListener('click', function() {
+            sendMessageToContentScript('togglePanel');
+            updateStatus('面板显示状态已切换。');
+        });
+    };
+
+    document.getElementById('dr-popup-model').addEventListener('change', function() {
+        const v = String(this.value || '');
+        const custom = document.getElementById('dr-popup-model-custom');
+        if (!custom) return;
+        custom.style.display = v === 'custom' ? 'block' : 'none';
+    });
+
+    document.getElementById('dr-popup-thinking').addEventListener('input', function() {
+        setThinkingLabel(this.value);
+    });
+
+    document.getElementById('dr-popup-save').addEventListener('click', async function() {
         try {
-            const tab = tabs && tabs[0];
-            if (!tab || typeof tab.id !== 'number') {
-                updateStatus('未找到活动标签页');
-                return;
-            }
-            if (chrome.sidePanel && chrome.sidePanel.open) {
-                await chrome.sidePanel.open({ tabId: tab.id });
-                updateStatus('已打开侧栏');
-            } else {
-                updateStatus('当前浏览器不支持 side panel');
-            }
+            await saveSettingsFromPopup();
+            updateStatus('设置已保存');
         } catch (e) {
-            updateStatus('打开侧栏失败: ' + String(e && e.message ? e.message : e));
+            updateStatus('保存失败: ' + String(e && e.message ? e.message : e));
         }
     });
-});
 
-loadSettingsToPopup();
+    document.getElementById('dr-popup-open-sidepanel').addEventListener('click', function() {
+        chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+            try {
+                const tab = tabs && tabs[0];
+                if (!tab || typeof tab.id !== 'number') {
+                    updateStatus('未找到活动标签页');
+                    return;
+                }
+                if (chrome.sidePanel && chrome.sidePanel.open) {
+                    await chrome.sidePanel.open({ tabId: tab.id });
+                    updateStatus('已打开侧栏');
+                } else {
+                    updateStatus('当前浏览器不支持 side panel');
+                }
+            } catch (e) {
+                updateStatus('打开侧栏失败: ' + String(e && e.message ? e.message : e));
+            }
+        });
+    });
+
+    loadSettingsToPopup();
+});

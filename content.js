@@ -17,8 +17,8 @@ console.log('DeepRead content script loaded!');
 // 检测是否在Chrome扩展环境中
 const isExtensionEnvironment = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id;
 
-// gemini-2.5-flash-lite   gemini-flash-lite-latest   gemini-3-flash-preview
-const MODEL_ID = 'gemini-3-flash-preview'
+// flash-lite  flash  flash-preview
+const MODEL_ID = 'gemini-flash-lite-latest'
 const PROVIDER = 'google'
 const default_bot_language = '中文'
 const greetingMessage = '您好！我是DeepRead助手。您可以向我提问有关本页面内容的问题，我将尽力为您解答。';
@@ -7182,9 +7182,9 @@ function createSettingsPanel() {
             <div class="deepread-settings-item">
                 <label for="deepread-model-select">模型选择</label>
                 <select id="deepread-model-select" class="deepread-settings-select">
-                    <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+                    <option value="gemini-flash-latest">gemini-flash-latest</option>
                     <option value="gemini-flash-lite-latest">gemini-flash-lite-latest</option>
-                    <option value="gemini-3-flash-preview" selected>gemini-3-flash-preview</option>
+                    <option value="gemini-3.1-flash-lite-preview" selected>gemini-3.1-flash-lite-preview</option>
                     <option value="custom">自定义模型...</option>
                 </select>
                 <input type="text" id="deepread-model-custom" class="deepread-settings-input" 
@@ -7284,7 +7284,7 @@ function saveSettings(shouldRefresh = false) {
     const customModelInput = document.getElementById('deepread-model-custom');
     let modelId = modelSelect.value;
     if (modelId === 'custom') {
-        modelId = customModelInput.value.trim() || 'gemini-3-flash-preview';
+        modelId = customModelInput.value.trim() || 'gemini-flash-lite-latest';
     }
     
     // 获取 thinkingLevel 设置
