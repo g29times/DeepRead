@@ -168,7 +168,7 @@ async function searchMemories(query, pageContent, userId = "neo") {
         const filters = {
             OR: [
                 { user_id: finalUserId },
-                ...agentIds.map((aid) => ({ agent_id: aid })),
+                { agent_id: { in: agentIds } },
             ]
         };
 
