@@ -5641,7 +5641,103 @@ async function chatWithAI(userMessage, chatHistory = [], pageContent = '', image
     // 先搜索相关记忆 MCP
     let relatedMemories = [];
     try {
-        relatedMemories = await searchMemories(userMessage, pageContent);
+        const buildMem0Query = async () => {
+            const original = String(userMessage || '').trim();
+            if (!original) return original;
+
+            // 获取用户设置的API Key
+            let API_KEY = null;
+            if (isExtensionEnvironment && chrome.storage) {
+                API_KEY = await new Promise(resolve => {
+                    chrome.storage.sync.get(['deepread_api_key'], function(result) {
+                        resolve(result.deepread_api_key || null);
+                    });
+                });
+            } else {
+                API_KEY = localStorage.getItem('deepread_api_key');
+            }
+            if (!API_KEY) return original;
+
+            // 获取用户配置的模型
+            let userModelId = MODEL_ID;
+            if (isExtensionEnvironment && chrome.storage) {
+                try {
+                    const result = await new Promise(resolve => {
+                        chrome.storage.sync.get(['deepread_model'], resolve);
+                    });
+                    if (result.deepread_model && result.deepread_model.trim() !== '') {
+                        userModelId = result.deepread_model.trim();
+                    }
+                } catch (e) {
+                }
+            } else {
+                const storedModel = localStorage.getItem('deepread_model');
+                if (storedModel) userModelId = storedModel;
+            }
+
+            const pageCtxText = String(pageContent || '').trim().slice(0, 1200);
+            const recentHistory = Array.isArray(chatHistory) ? chatHistory.slice(-6) : [];
+            const historyText = recentHistory
+                .map((m) => {
+                    const role = (m && m.role) ? String(m.role) : '';
+                    const msg = (m && m.message) ? String(m.message) : (m && m.content) ? String(m.content) : '';
+                    const c = String(msg || '').trim();
+                    if (!c) return '';
+                    const r = role === 'user' ? '用户' : '助手';
+                    return `${r}：${c.slice(0, 200)}`;
+                })
+                .filter(Boolean)
+                .join('\n')
+                .slice(0, 1200);
+
+            const prompt = `你在为“记忆检索”生成搜索关键词短语。\n\n上下文（可能为空）：\n- 页面摘要：${pageCtxText || '（无）'}\n- 最近对话：\n${historyText || '（无）'}\n\n用户输入：${original}\n\n要求：\n1) 输出 1~3 个短语，用英文逗号分隔\n2) 每个短语必须同时包含中文和英文，格式为：中文短语 / English phrase\n3) 每个短语尽量短（2~10 个词），覆盖当前话题即可\n4) 如果用户输入很泛（如“聊聊/继续/展开/说说”），必须优先根据页面摘要与最近对话推断主题来生成短语，而不是输出泛化词\n5) 只输出短语，不要输出解释、编号、引号、代码块`;
+
+            const API_URL = API_BASE_URL + `${userModelId}:generateContent?key=${API_KEY}`;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
+            try {
+                const resp = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                        generationConfig: {
+                            responseMimeType: 'text/plain',
+                            temperature: 0.2,
+                            topP: 0.95,
+                            topK: 64,
+                            maxOutputTokens: 256,
+                        }
+                    }),
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                if (!resp.ok) return original;
+
+                const data = await resp.json();
+                let rewrittenText = '';
+                if (data && Array.isArray(data.candidates) && data.candidates[0] && data.candidates[0].content && Array.isArray(data.candidates[0].content.parts)) {
+                    rewrittenText = String(data.candidates[0].content.parts.map(p => p && p.text ? p.text : '').join('') || '').trim();
+                } else if (data && Array.isArray(data.choices) && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
+                    rewrittenText = String(data.choices[0].message.content || '').trim();
+                }
+
+                const parts = String(rewrittenText || '')
+                    .split(/[,，\n]+/g)
+                    .map(s => String(s || '').trim())
+                    .filter(Boolean)
+                    .slice(0, 3);
+                if (!parts.length) return original;
+
+                return parts.join(', ');
+            } catch (e) {
+                clearTimeout(timeoutId);
+                return original;
+            }
+        };
+
+        const mem0Query = await buildMem0Query();
+        relatedMemories = await searchMemories(mem0Query, pageContent);
     } catch (error) {
         console.error('搜索记忆时出错:', error);
     }
