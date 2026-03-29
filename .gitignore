@@ -1,0 +1,4 @@
+kiki_agent_tmux/
+node_modules/
+__pycache__/
+.env
