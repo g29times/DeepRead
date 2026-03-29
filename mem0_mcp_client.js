@@ -156,10 +156,19 @@ async function searchMemories(query, pageContent, userId = "neo") {
     try {
         debugLog(`正在搜索与"${query}"相关的记忆...`);
 
+        const finalUserId = settings.userId || userId || MEM0_DEFAULT_USER_ID;
+        const configuredAgentId = settings.agentId || MEM0_DEFAULT_AGENT_ID;
+        // 跨项目共享 agent 记忆：deepread + jiji 都纳入检索范围（去重）
+        const agentIds = Array.from(new Set([
+            configuredAgentId,
+            'deepread',
+            'jiji',
+        ].map((s) => String(s || '').trim()).filter(Boolean)));
+
         const filters = {
             OR: [
-                { user_id: settings.userId || userId || MEM0_DEFAULT_USER_ID },
-                { agent_id: settings.agentId || MEM0_DEFAULT_AGENT_ID }
+                { user_id: finalUserId },
+                ...agentIds.map((aid) => ({ agent_id: aid })),
             ]
         };
 
