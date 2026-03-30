@@ -477,6 +477,53 @@ body {
   gap: 6px;
 }
 
+.drsp-img-overlay {
+  position: fixed;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.drsp-img-modal {
+  position: relative;
+  width: 100%;
+  max-width: 92vw;
+  max-height: 92vh;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.drsp-img-full {
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 10px;
+}
+
+.drsp-img-close {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  cursor: pointer;
+}
+
 .drsp-modal-overlay {
   position: fixed;
   left: 0;

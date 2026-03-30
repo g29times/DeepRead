@@ -487,11 +487,11 @@ function renderMeta(meta) {
   el.innerHTML = `${escapeHtml(title)}<br/>${escapeHtml(url)}`;
 }
 
-function renderChat(history) {
+function renderChat(chatHistory) {
   const container = qs('drsp-messages');
   if (!container) return;
   container.innerHTML = '';
-  (history || []).forEach((m) => {
+  (chatHistory || []).forEach((m) => {
     const messageId = m && m.messageId ? String(m.messageId) : '';
     const raw = String(m.rawMessage || m.message || '');
 
@@ -523,6 +523,13 @@ function renderChat(history) {
           const el = document.createElement('img');
           el.src = img.data;
           el.alt = img.name || 'image';
+          el.className = 'drsp-msg-image';
+          el.title = '点击查看原图';
+          el.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openImagePreview(img.data, el.alt);
+          });
           item.appendChild(el);
           imgs.appendChild(item);
         });
@@ -547,6 +554,20 @@ function renderChat(history) {
 
     const actions = document.createElement('div');
     actions.className = 'drsp-msg-actions';
+
+    const toTopBtn = document.createElement('button');
+    toTopBtn.className = 'drsp-msg-action';
+    toTopBtn.textContent = '回顶';
+    toTopBtn.addEventListener('click', () => {
+      scrollChatToTop();
+    });
+
+    const toBottomBtn = document.createElement('button');
+    toBottomBtn.className = 'drsp-msg-action';
+    toBottomBtn.textContent = '去底';
+    toBottomBtn.addEventListener('click', () => {
+      scrollChatToBottom();
+    });
 
     const editBtn = document.createElement('button');
     editBtn.className = 'drsp-msg-action';
@@ -643,6 +664,9 @@ function renderChat(history) {
       actions.appendChild(retryBtn);
     }
 
+    actions.appendChild(toTopBtn);
+    actions.appendChild(toBottomBtn);
+
     const copyBtn = document.createElement('button');
     copyBtn.className = 'drsp-msg-action';
     copyBtn.textContent = '复制';
@@ -680,6 +704,92 @@ function renderChat(history) {
   }
 
   applyChatSearchHighlight();
+}
+
+function scrollChatToTop() {
+  const container = qs('drsp-messages');
+  if (!container) return;
+  try {
+    container.scrollTo({ top: 0, behavior: 'smooth' });
+  } catch (e) {
+    try {
+      container.scrollTop = 0;
+    } catch (err) {
+      // ignore
+    }
+  }
+}
+
+function scrollChatToBottom() {
+  const container = qs('drsp-messages');
+  if (!container) return;
+  try {
+    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+  } catch (e) {
+    try {
+      container.scrollTop = container.scrollHeight;
+    } catch (err) {
+      // ignore
+    }
+  }
+}
+
+function openImagePreview(dataUrl, altText = '') {
+  if (!dataUrl) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'drsp-img-overlay';
+
+  const modal = document.createElement('div');
+  modal.className = 'drsp-img-modal';
+
+  const img = document.createElement('img');
+  img.className = 'drsp-img-full';
+  img.src = dataUrl;
+  img.alt = altText || 'image';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'drsp-img-close';
+  closeBtn.textContent = '关闭';
+
+  const cleanup = () => {
+    try {
+      document.removeEventListener('keydown', onKeydown, true);
+    } catch (e) {
+      // ignore
+    }
+    try {
+      overlay.remove();
+    } catch (e) {
+      // ignore
+    }
+  };
+
+  const onKeydown = (e) => {
+    if (e && e.key === 'Escape') {
+      e.preventDefault();
+      cleanup();
+    }
+  };
+
+  overlay.addEventListener('click', () => {
+    cleanup();
+  });
+  modal.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
+  closeBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    cleanup();
+  });
+
+  modal.appendChild(closeBtn);
+  modal.appendChild(img);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  document.addEventListener('keydown', onKeydown, true);
 }
 
 function normalizeSearchText(s) {
