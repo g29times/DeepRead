@@ -8,6 +8,8 @@ let __selectedImages = [];
 let __selectedFiles = [];
 let __analysisCollapsed = false;
 let __chatSearchQuery = '';
+
+const __spImageDataCache = new Map();
 let __chatSearchHits = [];
 let __chatSearchIndex = -1;
 let __chatSearchMarks = [];
@@ -517,19 +519,54 @@ function renderChat(chatHistory) {
         const imgs = document.createElement('div');
         imgs.className = 'drsp-msg-images';
         m.images.forEach((img) => {
-          if (!img || !img.data) return;
+          if (!img || (!img.data && !img.id)) return;
           const item = document.createElement('div');
           item.className = 'drsp-msg-image-item';
           const el = document.createElement('img');
-          el.src = img.data;
-          el.alt = img.name || 'image';
+          const id = img.id ? String(img.id) : '';
+          const name = img.name || 'image';
+          el.alt = name;
           el.className = 'drsp-msg-image';
           el.title = '点击查看原图';
-          el.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            openImagePreview(img.data, el.alt);
-          });
+
+          const renderData = (dataUrl) => {
+            if (!dataUrl) return;
+            try { __spImageDataCache.set(id || dataUrl, String(dataUrl)); } catch (e) { /* no-op */ }
+            el.src = String(dataUrl);
+            el.addEventListener('click', (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              openImagePreview(String(dataUrl), name);
+            });
+          };
+
+          if (img.data) {
+            renderData(img.data);
+          } else if (id) {
+            const cached = __spImageDataCache.get(id);
+            if (cached) {
+              renderData(cached);
+            } else {
+              el.style.opacity = '0.6';
+              el.style.filter = 'blur(1px)';
+              el.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+              sendToContent('deepread_sp_get_image', { imageId: id })
+                .then((resp) => {
+                  try {
+                    if (resp && resp.ok && resp.image && resp.image.data) {
+                      renderData(resp.image.data);
+                      el.style.opacity = '1';
+                      el.style.filter = '';
+                    }
+                  } catch (e) {
+                    // ignore
+                  }
+                })
+                .catch(() => {
+                  // ignore
+                });
+            }
+          }
           item.appendChild(el);
           imgs.appendChild(item);
         });
@@ -1360,7 +1397,16 @@ async function sendChatMessage(text, opts = {}) {
     rawMessage: optimisticText,
     message: optimisticText,
     messageId: pendingId,
-    images: allowUploads ? (__selectedImages || []).map((x) => ({ id: x.id, data: x.data, name: x.name })) : [],
+    images: allowUploads ? (__selectedImages || []).map((x) => {
+      try {
+        const id = x && x.id ? String(x.id) : '';
+        const data = x && x.data ? String(x.data) : '';
+        if (id && data) __spImageDataCache.set(id, data);
+        return { id, name: x && x.name ? x.name : '' };
+      } catch (e) {
+        return { id: '', name: '' };
+      }
+    }) : [],
     attachments: [],
   };
   __localChatHistory.push(optimisticMsg);

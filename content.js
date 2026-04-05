@@ -1187,7 +1187,7 @@ if (isExtensionEnvironment) {
                     if (!pageContent) {
                         try { pageContent = extractPageContent(); } catch (e) { /* no-op */ }
                     }
-                    // SidePanel 概念解释：优先命中缓存，避免重复调用 LLM
+
                     let conceptKey = '';
                     try {
                         if (window.cacheManager && typeof window.cacheManager.hashString === 'function') {
@@ -1238,6 +1238,28 @@ if (isExtensionEnvironment) {
             return true;
         }
 
+        if (request.action === 'deepread_sp_get_image') {
+            (async () => {
+                try {
+                    const imageId = String(request.imageId || '').trim();
+                    if (!imageId) {
+                        sendResponse({ ok: false, error: 'missing imageId' });
+                        return;
+                    }
+                    const rec = await idbGetTabChatImage(imageId);
+                    if (!rec || !rec.data) {
+                        sendResponse({ ok: true, image: null });
+                        return;
+                    }
+                    sendResponse({ ok: true, image: { id: String(rec.id || imageId), data: String(rec.data || ''), name: String(rec.name || '') } });
+                } catch (err) {
+                    console.error('SidePanel get_image failed:', err);
+                    sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
+                }
+            })();
+            return true;
+        }
+
         if (request.action === 'deepread_sp_chat_send') {
             (async () => {
                 try {
@@ -1249,8 +1271,11 @@ if (isExtensionEnvironment) {
                         return;
                     }
 
+                    const imagesWithData = images;
+                    const imageRefs = await persistImagesAndReturnRefs(imagesWithData);
+
                     // 只更新 history，不渲染 DOM
-                    const hasImages = images && images.length > 0;
+                    const hasImages = imagesWithData && imagesWithData.length > 0;
                     const hasAtts = attachments && attachments.length > 0;
                     const placeholder = hasImages && hasAtts
                         ? '[图片+附件]'
@@ -1264,7 +1289,7 @@ if (isExtensionEnvironment) {
                         message: message || placeholder,
                         rawMessage: message || placeholder,
                         messageId: generateUniqueId(),
-                        images,
+                        images: imageRefs,
                         attachments
                     });
                     if (CHAT_PERSIST_ENABLED) {
@@ -1282,7 +1307,7 @@ if (isExtensionEnvironment) {
                             ? '请结合我发送的图片内容回答。'
                             : '请结合我发送的附件内容回答。';
 
-                    const responseText = await chatWithAI(message || fallbackPrompt, chatHistory, pageContent, images, attachments);
+                    const responseText = await chatWithAI(message || fallbackPrompt, chatHistory, pageContent, imagesWithData, attachments);
                     const response = processChatResponse(responseText);
 
                     chatHistory.push({ role: 'assistant', message: response, rawMessage: responseText, messageId: generateUniqueId() });
@@ -6995,6 +7020,134 @@ async function resolveDeepreadTabId() {
     });
 }
 
+async function openDeepreadChatIdb() {
+    if (!isExtensionEnvironment || typeof indexedDB === 'undefined') return null;
+    return new Promise((resolve) => {
+        try {
+            const req = indexedDB.open('deepread_chat', 2);
+            req.onupgradeneeded = () => {
+                try {
+                    const db = req.result;
+                    if (!db.objectStoreNames.contains('tab_chat')) {
+                        db.createObjectStore('tab_chat');
+                    }
+                    if (!db.objectStoreNames.contains('tab_chat_images')) {
+                        db.createObjectStore('tab_chat_images');
+                    }
+                } catch (e) {
+                    // ignore
+                }
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => resolve(null);
+        } catch (e) {
+            resolve(null);
+        }
+    });
+}
+
+async function idbGetValue(storeName, key) {
+    const db = await openDeepreadChatIdb();
+    if (!db) return null;
+    return new Promise((resolve) => {
+        try {
+            const tx = db.transaction([storeName], 'readonly');
+            const store = tx.objectStore(storeName);
+            const req = store.get(key);
+            req.onsuccess = () => resolve(req.result || null);
+            req.onerror = () => resolve(null);
+            tx.oncomplete = () => {
+                try { db.close(); } catch (e) { /* no-op */ }
+            };
+            tx.onerror = () => {
+                try { db.close(); } catch (e) { /* no-op */ }
+            };
+        } catch (e) {
+            try { db.close(); } catch (e2) { /* no-op */ }
+            resolve(null);
+        }
+    });
+}
+
+async function idbSetValue(storeName, key, value) {
+    const db = await openDeepreadChatIdb();
+    if (!db) return false;
+    return new Promise((resolve) => {
+        try {
+            const tx = db.transaction([storeName], 'readwrite');
+            const store = tx.objectStore(storeName);
+            store.put(value, key);
+            tx.oncomplete = () => {
+                try { db.close(); } catch (e) { /* no-op */ }
+                resolve(true);
+            };
+            tx.onerror = () => {
+                try { db.close(); } catch (e) { /* no-op */ }
+                resolve(false);
+            };
+        } catch (e) {
+            try { db.close(); } catch (e2) { /* no-op */ }
+            resolve(false);
+        }
+    });
+}
+
+async function idbGetTabChat(key) {
+    return await idbGetValue('tab_chat', key);
+}
+
+async function idbSetTabChat(key, value) {
+    return await idbSetValue('tab_chat', key, value);
+}
+
+async function idbSetTabChatImage(imageId, imageRecord) {
+    if (!imageId) return false;
+    return await idbSetValue('tab_chat_images', String(imageId), imageRecord);
+}
+
+async function idbGetTabChatImage(imageId) {
+    if (!imageId) return null;
+    return await idbGetValue('tab_chat_images', String(imageId));
+}
+
+function stripImagesFromChatHistory(history) {
+    const arr = Array.isArray(history) ? history : [];
+    return arr.map((m) => {
+        try {
+            if (!m || !Array.isArray(m.images) || m.images.length === 0) return m;
+            const nextImages = m.images.map((img) => {
+                if (!img) return img;
+                const id = img.id ? String(img.id) : '';
+                const name = img.name ? String(img.name) : '';
+                return { id, name };
+            });
+            return { ...m, images: nextImages };
+        } catch (e) {
+            return m;
+        }
+    });
+}
+
+async function persistImagesAndReturnRefs(images) {
+    const imgs = Array.isArray(images) ? images : [];
+    const refs = [];
+    for (const img of imgs) {
+        try {
+            if (!img) continue;
+            const id = img.id ? String(img.id) : '';
+            const data = img.data ? String(img.data) : '';
+            const name = img.name ? String(img.name) : '';
+            if (id && data) {
+                await idbSetTabChatImage(id, { id, data, name, savedAt: Date.now() });
+            }
+            if (id) refs.push({ id, name });
+        } catch (e) {
+            // ignore per image
+        }
+    }
+    return refs;
+}
+
 function getTabChatStorageKey(tabId) {
     if (typeof tabId !== 'number') return null;
     return `${TAB_CHAT_KEY_PREFIX}${tabId}`;
@@ -7006,10 +7159,22 @@ async function loadTabChatHistory() {
     if (!key) return [];
 
     try {
+        const idbValue = await idbGetTabChat(key);
+        if (Array.isArray(idbValue)) return idbValue;
+    } catch (e) {
+        // ignore
+    }
+
+    try {
         if (chrome.storage && chrome.storage.session) {
             const result = await chrome.storage.session.get([key]);
             const value = result ? result[key] : null;
-            return Array.isArray(value) ? value : [];
+            if (Array.isArray(value)) {
+                const stripped = stripImagesFromChatHistory(value);
+                try { await idbSetTabChat(key, stripped); } catch (e) { /* no-op */ }
+                return stripped;
+            }
+            return [];
         }
     } catch (e) {
         // ignore
@@ -7019,7 +7184,12 @@ async function loadTabChatHistory() {
         if (chrome.storage && chrome.storage.local) {
             const result = await chrome.storage.local.get([key]);
             const value = result ? result[key] : null;
-            return Array.isArray(value) ? value : [];
+            if (Array.isArray(value)) {
+                const stripped = stripImagesFromChatHistory(value);
+                try { await idbSetTabChat(key, stripped); } catch (e) { /* no-op */ }
+                return stripped;
+            }
+            return [];
         }
     } catch (e) {
         // ignore
@@ -7032,19 +7202,31 @@ async function saveTabChatHistory(history) {
     const tabId = await resolveDeepreadTabId();
     const key = getTabChatStorageKey(tabId);
     if (!key) return;
-    const value = Array.isArray(history) ? history : [];
+    const value = stripImagesFromChatHistory(history);
+
+    try {
+        const ok = await idbSetTabChat(key, value);
+        if (ok) return;
+    } catch (e) {
+        // ignore
+    }
 
     try {
         if (chrome.storage && chrome.storage.session) {
             await chrome.storage.session.set({ [key]: value });
+
             return;
         }
     } catch (e) {
         // ignore
     }
 
-    if (chrome.storage && chrome.storage.local) {
-        await chrome.storage.local.set({ [key]: value });
+    try {
+        if (chrome.storage && chrome.storage.local) {
+            await chrome.storage.local.set({ [key]: value });
+        }
+    } catch (e) {
+        // ignore
     }
 }
 
