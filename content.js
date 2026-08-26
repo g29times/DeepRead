@@ -452,13 +452,18 @@ function showFloatActionsForExistingHighlight({ x, y, highlight, paragraphId } =
         }
 
         if (btnExplain){
-            btnExplain.addEventListener('click', function(e){
+            btnExplain.addEventListener('click', async function(e){
                 e.stopPropagation();
                 e.preventDefault();
                 try{ floatButton.remove(); }catch{}
 
                 const text = String((highlight && highlight.text) || '').trim();
                 if (!text) return;
+                const hydrated = await ensurePageAnalyzedHydratedForExplain();
+                if (!hydrated && !pageAnalyzed){
+                    showExplainAnalysisRequiredPrompt();
+                    return;
+                }
                 const anchorData = { paragraphId: paragraphId || (highlight && highlight.paragraphId) };
                 if (highlight && typeof highlight.start === 'number' && typeof highlight.end === 'number'){
                     anchorData.start = highlight.start;
@@ -475,6 +480,10 @@ function showFloatActionsForExistingHighlight({ x, y, highlight, paragraphId } =
     }catch(err){
         console.warn('DeepRead: showFloatActionsForExistingHighlight failed:', err);
     }
+}
+
+function showExplainAnalysisRequiredPrompt(){
+    alert('请先全文分析，并打开右侧面板。');
 }
 
 function showDeepReadToast(text, type = 'info'){
@@ -1017,20 +1026,52 @@ if (isExtensionEnvironment) {
         }
         console.debug(`「Deepread」${path ? '[' + path + ']' : ''} 收到请求（请检查VPN）:`, request);
         if (request.action === 'deepread_sp_get_state') {
-            sendResponse({
-                ok: true,
-                pageMeta: {
-                    title: document.title || '',
-                    url: window.location.href
-                },
-                pageAnalyzed,
-                analysisResult: pageAnalyzed ? {
-                    summary: pageSummary,
-                    keyTerms: pageKeyTerms,
-                    keyParagraphs: pageKeyParagraphs
-                } : null,
-                chatHistory: chatHistory || []
-            });
+            (async () => {
+                try {
+                    // 防御：有时导航/重注入过程中，内存 chatHistory 会暂时丢失；
+                    // 此时按 tabId 从持久化存储懒加载一次，避免 SidePanel 把 UI 覆盖为空。
+                    if (CHAT_PERSIST_ENABLED && (!Array.isArray(chatHistory) || chatHistory.length === 0)) {
+                        try {
+                            const cached = await loadTabChatHistory();
+                            if (Array.isArray(cached) && cached.length > 0) {
+                                chatHistory = cached;
+                            }
+                        } catch (e) {
+                            // ignore
+                        }
+                    }
+
+                    sendResponse({
+                        ok: true,
+                        pageMeta: {
+                            title: document.title || '',
+                            url: window.location.href
+                        },
+                        pageAnalyzed,
+                        analysisResult: pageAnalyzed ? {
+                            summary: pageSummary,
+                            keyTerms: pageKeyTerms,
+                            keyParagraphs: pageKeyParagraphs
+                        } : null,
+                        chatHistory: chatHistory || []
+                    });
+                } catch (e) {
+                    sendResponse({
+                        ok: true,
+                        pageMeta: {
+                            title: document.title || '',
+                            url: window.location.href
+                        },
+                        pageAnalyzed,
+                        analysisResult: pageAnalyzed ? {
+                            summary: pageSummary,
+                            keyTerms: pageKeyTerms,
+                            keyParagraphs: pageKeyParagraphs
+                        } : null,
+                        chatHistory: chatHistory || []
+                    });
+                }
+            })();
             return true;
         }
 
@@ -2651,25 +2692,7 @@ function addTextSelectionListener() {
                     debugLog('[Explain] hydratedFromCache=' + hydrated + ', pageAnalyzed=' + pageAnalyzed);
 
                     if (!pageAnalyzed){
-                        if (!document.getElementById('deepread-container')) {
-                            createDeepReadPanel();
-                        }
-                        const container = document.getElementById('deepread-container');
-                        if (container) {
-                            container.classList.remove('deepread-hidden');
-                        }
-                        if (!window.__deepreadExplainGuideShownForUrl || window.__deepreadExplainGuideShownForUrl !== window.location.href){
-                            window.__deepreadExplainGuideShownForUrl = window.location.href;
-                            try{
-                                extractPageContent();
-                            }catch(err){
-                                console.warn('DeepRead: 解释前引导分析失败:', err);
-                            }
-                        } else {
-                            try{
-                                if (pageContent) viewTextEditor(pageContent);
-                            }catch{}
-                        }
+                        showExplainAnalysisRequiredPrompt();
                         return;
                     }
 
@@ -6996,26 +7019,29 @@ async function clearChatHistory() {
 }
 
 async function resolveDeepreadTabId() {
-    if (deepreadTabId !== null) return deepreadTabId;
+    // 只缓存成功的 tabId；不要把失败结果（null）永久缓存。
+    // 否则在导航切换/注入瞬间 runtime.lastError 会导致后续永远无法恢复，从而“同一标签页对话消失”。
+    if (typeof deepreadTabId === 'number') return deepreadTabId;
     if (!isExtensionEnvironment || !chrome || !chrome.runtime || !chrome.runtime.sendMessage) {
-        deepreadTabId = null;
-        return deepreadTabId;
+        return null;
     }
     return new Promise((resolve) => {
         try {
             chrome.runtime.sendMessage({ action: 'deepread_get_tab_id' }, (resp) => {
                 if (chrome.runtime.lastError) {
-                    deepreadTabId = null;
-                    resolve(deepreadTabId);
+                    resolve(null);
                     return;
                 }
                 const id = resp && resp.ok ? resp.tabId : null;
-                deepreadTabId = (typeof id === 'number') ? id : null;
-                resolve(deepreadTabId);
+                if (typeof id === 'number') {
+                    deepreadTabId = id;
+                    resolve(id);
+                    return;
+                }
+                resolve(null);
             });
         } catch (e) {
-            deepreadTabId = null;
-            resolve(deepreadTabId);
+            resolve(null);
         }
     });
 }
@@ -7158,13 +7184,8 @@ async function loadTabChatHistory() {
     const key = getTabChatStorageKey(tabId);
     if (!key) return [];
 
-    try {
-        const idbValue = await idbGetTabChat(key);
-        if (Array.isArray(idbValue)) return idbValue;
-    } catch (e) {
-        // ignore
-    }
-
+    // 重要：跨域导航时（同一 tab 访问不同域名），content script 的 IndexedDB 由于 origin 隔离不可访问。
+    // 因此读取顺序必须优先 storage.session/local（扩展存储，跨域共享），IDB 仅作为当前域加速缓存。
     try {
         if (chrome.storage && chrome.storage.session) {
             const result = await chrome.storage.session.get([key]);
@@ -7174,7 +7195,6 @@ async function loadTabChatHistory() {
                 try { await idbSetTabChat(key, stripped); } catch (e) { /* no-op */ }
                 return stripped;
             }
-            return [];
         }
     } catch (e) {
         // ignore
@@ -7189,8 +7209,14 @@ async function loadTabChatHistory() {
                 try { await idbSetTabChat(key, stripped); } catch (e) { /* no-op */ }
                 return stripped;
             }
-            return [];
         }
+    } catch (e) {
+        // ignore
+    }
+
+    try {
+        const idbValue = await idbGetTabChat(key);
+        if (Array.isArray(idbValue)) return idbValue;
     } catch (e) {
         // ignore
     }
@@ -7206,7 +7232,9 @@ async function saveTabChatHistory(history) {
 
     try {
         const ok = await idbSetTabChat(key, value);
-        if (ok) return;
+        // 注意：content script 的 IndexedDB 受页面 origin 隔离。
+        // 若仅写 IDB，跨域导航（同一 tab 访问新域名）将无法读取旧域名的 IDB，表现为“对话消失”。
+        // 因此即使 IDB 成功，也继续写入 storage.session/local 作为跨域兜底。
     } catch (e) {
         // ignore
     }
